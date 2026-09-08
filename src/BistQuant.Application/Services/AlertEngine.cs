@@ -117,16 +117,21 @@ public class AlertEngine : IAlertEngine
                 {
                     try
                     {
-                        await provider.SendAsync(msg, cancellationToken);
-                        dispatched = true;
+                        var result = await provider.SendAsync(msg, cancellationToken);
+                        dispatched = result.Success;
+                        if (!result.Success)
+                        {
+                            _logger.LogWarning("Notification dispatch failed for subscription {SubId} via {Channel}: {Error}", sub.Id, sub.Channel, result.Error);
+                        }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Failed to send alert via {Channel} for subscription {SubId}", sub.Channel, sub.Id);
+                        _logger.LogWarning(ex, "Exception during alert dispatch via {Channel} for subscription {SubId}", sub.Channel, sub.Id);
+                        dispatched = false;
                     }
                 }
 
-                // LastTriggeredAt is updated strictly after verified successful dispatch
+                // Invariant: LastTriggeredAt is updated strictly after verified successful dispatch
                 if (dispatched)
                 {
                     sub.LastTriggeredAt = now;

@@ -30,6 +30,7 @@ public class BistQuantDbContext : DbContext, IApplicationDbContext
     public DbSet<AlertSubscription> AlertSubscriptions => Set<AlertSubscription>();
     public DbSet<AlertNotification> AlertNotifications => Set<AlertNotification>();
     public DbSet<User> Users => Set<User>();
+    public DbSet<WorkerHeartbeat> WorkerHeartbeats => Set<WorkerHeartbeat>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {

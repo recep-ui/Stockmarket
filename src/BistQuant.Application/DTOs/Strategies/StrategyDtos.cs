@@ -21,7 +21,9 @@ public record StrategyDto(
     string StrategyType,
     Timeframe Timeframe,
     bool IsActive,
-    List<StrategyRuleDto> Rules
+    List<StrategyRuleDto> Rules,
+    long? UserId = null,
+    bool IsSystem = false
 );
 
 public record CreateStrategyRequest(

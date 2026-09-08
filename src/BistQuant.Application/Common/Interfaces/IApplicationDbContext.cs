@@ -25,6 +25,7 @@ public interface IApplicationDbContext
     DbSet<AlertSubscription> AlertSubscriptions { get; }
     DbSet<AlertNotification> AlertNotifications { get; }
     DbSet<User> Users { get; }
+    DbSet<WorkerHeartbeat> WorkerHeartbeats { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

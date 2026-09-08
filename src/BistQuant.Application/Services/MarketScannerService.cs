@@ -1,6 +1,7 @@
 using BistQuant.Application.Common.Interfaces;
 using BistQuant.Application.Common.Models;
 using BistQuant.Application.DTOs.Scanner;
+using BistQuant.Domain.Entities;
 using BistQuant.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -10,6 +11,8 @@ namespace BistQuant.Application.Services;
 public interface IMarketScannerService
 {
     Task<List<ScannerItemDto>> ScanUniverseAsync(Timeframe timeframe = Timeframe.Daily, CancellationToken cancellationToken = default);
+
+    Task<List<ScannerItemDto>> ScanUniverseAsync(Timeframe timeframe, int? strategyId, CancellationToken cancellationToken = default);
 
     Task<PagedResult<ScannerItemDto>> GetScannerResultsAsync(ScannerFilterDto filter, CancellationToken cancellationToken = default);
 
@@ -43,8 +46,21 @@ public class MarketScannerService : IMarketScannerService
         _logger = logger;
     }
 
-    public async Task<List<ScannerItemDto>> ScanUniverseAsync(Timeframe timeframe = Timeframe.Daily, CancellationToken cancellationToken = default)
+    public Task<List<ScannerItemDto>> ScanUniverseAsync(Timeframe timeframe = Timeframe.Daily, CancellationToken cancellationToken = default)
     {
+        return ScanUniverseAsync(timeframe, null, cancellationToken);
+    }
+
+    public async Task<List<ScannerItemDto>> ScanUniverseAsync(Timeframe timeframe, int? strategyId, CancellationToken cancellationToken = default)
+    {
+        Strategy? strategy = null;
+        if (strategyId.HasValue)
+        {
+            strategy = await _context.Strategies
+                .Include(s => s.Rules)
+                .FirstOrDefaultAsync(s => s.Id == strategyId.Value, cancellationToken);
+        }
+
         var symbols = await _context.Symbols
             .AsNoTracking()
             .Where(s => s.IsActive)
@@ -57,7 +73,7 @@ public class MarketScannerService : IMarketScannerService
         {
             try
             {
-                var signal = await _signalEngine.GenerateAndSaveSignalAsync(sym.Id, timeframe, cancellationToken);
+                var signal = await _signalEngine.GenerateAndSaveSignalAsync(sym.Id, timeframe, strategy, cancellationToken);
                 if (signal == null) continue;
 
                 // Wire alerts pipeline: evaluate and dispatch notifications for generated signal

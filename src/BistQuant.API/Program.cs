@@ -72,7 +72,8 @@ if (string.IsNullOrWhiteSpace(jwtKey))
     {
         throw new InvalidOperationException("CRITICAL SECURITY ERROR: 'Jwt:Key' is missing in production environment. Startup aborted.");
     }
-    jwtKey = "BistQuantSuperSecretKeyForJwtTokenGeneration2026!";
+    jwtKey = "DEV_ONLY_INSECURE_SIGNING_KEY_DO_NOT_USE_IN_PRODUCTION_BistQuant2026!";
+    builder.Configuration["Jwt:Key"] = jwtKey;
 }
 
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "BistQuantApi";

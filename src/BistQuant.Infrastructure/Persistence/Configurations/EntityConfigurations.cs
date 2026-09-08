@@ -164,6 +164,12 @@ public class StrategyConfiguration : IEntityTypeConfiguration<Strategy>
         builder.Property(s => s.Name).HasMaxLength(100).IsRequired();
         builder.Property(s => s.Description).HasMaxLength(500);
         builder.Property(s => s.StrategyType).HasMaxLength(50).IsRequired();
+        builder.Property(s => s.IsSystem).HasDefaultValue(false);
+
+        builder.HasOne(s => s.User)
+               .WithMany()
+               .HasForeignKey(s => s.UserId)
+               .OnDelete(DeleteBehavior.SetNull);
     }
 }
 
@@ -417,3 +423,16 @@ public class AlertNotificationConfiguration : IEntityTypeConfiguration<AlertNoti
                .OnDelete(DeleteBehavior.Cascade);
     }
 }
+
+public class WorkerHeartbeatConfiguration : IEntityTypeConfiguration<WorkerHeartbeat>
+{
+    public void Configure(EntityTypeBuilder<WorkerHeartbeat> builder)
+    {
+        builder.HasKey(w => w.Id);
+        builder.Property(w => w.WorkerInstance).HasMaxLength(100).IsRequired();
+        builder.Property(w => w.ScanType).HasMaxLength(50).IsRequired();
+        builder.Property(w => w.ErrorMessage).HasMaxLength(1000);
+        builder.HasIndex(w => new { w.Timeframe, w.CompletedAt });
+    }
+}
+

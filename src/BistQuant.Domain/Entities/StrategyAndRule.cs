@@ -5,6 +5,10 @@ namespace BistQuant.Domain.Entities;
 
 public class Strategy : BaseEntity<int>
 {
+    public long? UserId { get; set; }
+    public User? User { get; set; }
+    public bool IsSystem { get; set; } = false;
+
     public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public string StrategyType { get; set; } = "Technical"; // TrendFollowing, Momentum, Breakout, Reversal, Swing

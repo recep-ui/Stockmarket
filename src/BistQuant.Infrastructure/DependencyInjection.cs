@@ -17,7 +17,9 @@ public static class DependencyInjection
     {
         var provider = configuration["DatabaseProvider"] ?? "SqlServer";
         var sqlServerConn = configuration.GetConnectionString("DefaultConnection") 
-            ?? "Server=localhost,1433;Database=BistQuantDb;User Id=sa;Password=YourStrong@Passw0rd;TrustServerCertificate=True;";
+            ?? (string.Equals(provider, "SqlServer", StringComparison.OrdinalIgnoreCase) 
+                ? throw new InvalidOperationException("Connection string 'DefaultConnection' is required when DatabaseProvider is SqlServer.") 
+                : string.Empty);
         var sqliteConn = configuration.GetConnectionString("SqliteConnection") 
             ?? "Data Source=bistquant.db;Cache=Shared;";
 

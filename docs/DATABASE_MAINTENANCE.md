@@ -28,14 +28,14 @@ INCLUDE (SymbolId, Score, SignalType, Price);
 Docker konteyneri içerisinden MSSQL veritabanı yedeğini almak için:
 ```bash
 docker exec -it bistquant-mssql /opt/mssql-tools18/bin/sqlcmd \
-   -S localhost -U sa -P "YourStrong@Passw0rd!2026" -C \
+   -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C \
    -Q "BACKUP DATABASE [BistQuantDb] TO DISK = N'/var/opt/mssql/backup/BistQuantDb_Full.bak' WITH NOFORMAT, NOINIT, SKIP, NOREWIND, NOUNLOAD, STATS = 10"
 ```
 
 ### 2.2. Geri Yükleme (Restore)
 ```bash
 docker exec -it bistquant-mssql /opt/mssql-tools18/bin/sqlcmd \
-   -S localhost -U sa -P "YourStrong@Passw0rd!2026" -C \
+   -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C \
    -Q "RESTORE DATABASE [BistQuantDb] FROM DISK = N'/var/opt/mssql/backup/BistQuantDb_Full.bak' WITH REPLACE"
 ```
 

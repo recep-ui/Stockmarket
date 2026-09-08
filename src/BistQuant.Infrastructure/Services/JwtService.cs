@@ -19,7 +19,11 @@ public class JwtService : IJwtService
 
     public (string Token, DateTime ExpiresAt) GenerateToken(User user)
     {
-        var keyString = _configuration["Jwt:Key"] ?? "BistQuantSuperSecretKeyForJwtTokenGeneration2026!";
+        var keyString = _configuration["Jwt:Key"];
+        if (string.IsNullOrWhiteSpace(keyString))
+        {
+            throw new InvalidOperationException("CRITICAL SECURITY ERROR: 'Jwt:Key' is not configured.");
+        }
         var issuer = _configuration["Jwt:Issuer"] ?? "BistQuantApi";
         var audience = _configuration["Jwt:Audience"] ?? "BistQuantClient";
         var expiryMinutes = int.TryParse(_configuration["Jwt:ExpiryMinutes"], out var minutes) ? minutes : 1440;

@@ -896,6 +896,11 @@ namespace BistQuant.Infrastructure.Migrations.Sqlite
                     b.Property<bool>("IsActive")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("IsSystem")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -912,7 +917,12 @@ namespace BistQuant.Infrastructure.Migrations.Sqlite
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<long?>("UserId")
+                        .HasColumnType("INTEGER");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("UserId");
 
                     b.ToTable("Strategies");
                 });
@@ -1123,6 +1133,54 @@ namespace BistQuant.Infrastructure.Migrations.Sqlite
                     b.ToTable("WatchlistItems");
                 });
 
+            modelBuilder.Entity("BistQuant.Domain.Entities.WorkerHeartbeat", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(1000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ScanType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Success")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("SymbolCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<byte>("Timeframe")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WorkerInstance")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Timeframe", "CompletedAt");
+
+                    b.ToTable("WorkerHeartbeats");
+                });
+
             modelBuilder.Entity("BistQuant.Domain.Entities.AlertNotification", b =>
                 {
                     b.HasOne("BistQuant.Domain.Entities.AlertSubscription", "AlertSubscription")
@@ -1317,6 +1375,16 @@ namespace BistQuant.Infrastructure.Migrations.Sqlite
                         .IsRequired();
 
                     b.Navigation("Signal");
+                });
+
+            modelBuilder.Entity("BistQuant.Domain.Entities.Strategy", b =>
+                {
+                    b.HasOne("BistQuant.Domain.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("BistQuant.Domain.Entities.StrategyRule", b =>

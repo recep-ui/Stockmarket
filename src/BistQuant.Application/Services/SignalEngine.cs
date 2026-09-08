@@ -1,4 +1,5 @@
 using BistQuant.Application.Common.Interfaces;
+using BistQuant.Application.Services.MarketData;
 using BistQuant.Domain.Entities;
 using BistQuant.Domain.Enums;
 using BistQuant.Domain.Models;
@@ -18,6 +19,7 @@ public interface ISignalEngine
     Task<Signal?> GenerateAndSaveSignalAsync(
         int symbolId,
         Timeframe timeframe,
+        Strategy? strategy = null,
         CancellationToken cancellationToken = default);
 
     Task<Signal?> GetLatestSignalAsync(
@@ -29,81 +31,46 @@ public interface ISignalEngine
 public class SignalEngine : ISignalEngine
 {
     private readonly IApplicationDbContext _context;
-    private readonly IScoringEngine _scoringEngine;
+    private readonly IStrategyEvaluationPipeline _pipeline;
+    private readonly ISignalClassifier _signalClassifier;
     private readonly ITechnicalAnalysisService _technicalService;
+    private readonly IMarketDataFreshnessPolicy _freshnessPolicy;
     private readonly ILogger<SignalEngine> _logger;
+
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
+    public SignalEngine(
+        IApplicationDbContext context,
+        IStrategyEvaluationPipeline pipeline,
+        ISignalClassifier signalClassifier,
+        ITechnicalAnalysisService technicalService,
+        IMarketDataFreshnessPolicy freshnessPolicy,
+        ILogger<SignalEngine> logger)
+    {
+        _context = context;
+        _pipeline = pipeline;
+        _signalClassifier = signalClassifier;
+        _technicalService = technicalService;
+        _freshnessPolicy = freshnessPolicy;
+        _logger = logger;
+    }
 
     public SignalEngine(
         IApplicationDbContext context,
         IScoringEngine scoringEngine,
         ITechnicalAnalysisService technicalService,
         ILogger<SignalEngine> logger)
+        : this(context, null!, new SignalClassifier(), technicalService, new MarketDataFreshnessPolicy(), logger)
     {
-        _context = context;
-        _scoringEngine = scoringEngine;
-        _technicalService = technicalService;
-        _logger = logger;
     }
 
     public SignalType ClassifySignal(int score)
     {
-        return ClassifySignal(score, null, null);
+        return _signalClassifier.ClassifySignal(score);
     }
 
     public SignalType ClassifySignal(int score, IndicatorSnapshot? snapshot, IReadOnlyList<PriceBar>? history)
     {
-        if (score >= 85) return SignalType.StrongBuy;
-        if (score >= 75) return SignalType.Buy;
-        if (score >= 65) return SignalType.BuyCandidate;
-        if (score >= 50) return SignalType.Watch;
-
-        // Section 8: Bearish Sell Semantics
-        // Lack of BUY evidence != SELL. Must have active bearish confirmation.
-        int bearishEvidence = 0;
-        if (snapshot != null)
-        {
-            if (snapshot.EMA20.HasValue && snapshot.EMA50.HasValue && snapshot.EMA20.Value < snapshot.EMA50.Value)
-                bearishEvidence++;
-
-            if (snapshot.MACD.HasValue && snapshot.MACDSignal.HasValue && snapshot.MACD.Value < snapshot.MACDSignal.Value)
-                bearishEvidence++;
-
-            if (snapshot.MACDHistogram.HasValue && snapshot.MACDHistogram.Value < 0)
-                bearishEvidence++;
-
-            if (snapshot.RSI14.HasValue && snapshot.RSI14.Value < 45)
-                bearishEvidence++;
-
-            if (snapshot.SuperTrendDirection.HasValue && snapshot.SuperTrendDirection.Value == 0)
-                bearishEvidence++;
-
-            if (history != null && history.Count >= 2)
-            {
-                if (history[^1].High < history[^2].High && history[^1].Low < history[^2].Low)
-                    bearishEvidence++;
-
-                if (snapshot.Support1.HasValue && history[^1].Close < snapshot.Support1.Value)
-                    bearishEvidence++;
-            }
-        }
-        else
-        {
-            // If called without snapshot (e.g. legacy test), fall back to score thresholds
-            return score switch
-            {
-                >= 35 => SignalType.Weak,
-                >= 20 => SignalType.Sell,
-                _ => SignalType.StrongSell
-            };
-        }
-
-        if (bearishEvidence >= 4 && score <= 25)
-            return SignalType.StrongSell;
-
-        if (bearishEvidence >= 2 && score <= 35)
-            return SignalType.Sell;
-
-        return SignalType.Weak;
+        return _signalClassifier.ClassifySignal(score, snapshot, history);
     }
 
     public RiskParameters CalculateRiskParameters(decimal currentPrice, IndicatorSnapshot snapshot)
@@ -122,7 +89,7 @@ public class SignalEngine : ISignalEngine
             stopLoss = Math.Max(atrStop, supportStop);
         }
 
-        // Section 9 / HGH-01 Fix: StopLoss must be strictly positive and bounded
+        // StopLoss must be strictly positive and bounded
         decimal minStopAllowed = Math.Round(currentPrice * 0.80m, 2);
         if (stopLoss <= 0 || stopLoss < minStopAllowed)
         {
@@ -160,25 +127,23 @@ public class SignalEngine : ISignalEngine
     public async Task<Signal?> GenerateAndSaveSignalAsync(
         int symbolId,
         Timeframe timeframe,
+        Strategy? strategy = null,
         CancellationToken cancellationToken = default)
     {
-        var latestBar = await _context.PriceBars
+        var recentBars = await _context.PriceBars
             .AsNoTracking()
             .Where(p => p.SymbolId == symbolId && p.Timeframe == timeframe)
             .OrderByDescending(p => p.Timestamp)
-            .FirstOrDefaultAsync(cancellationToken);
+            .Take(2)
+            .ToListAsync(cancellationToken);
 
-        if (latestBar == null) return null;
+        if (recentBars.Count == 0) return null;
 
-        // Section 9: Stale market data guard
-        var maxAllowedStaleness = timeframe switch
-        {
-            Timeframe.M15 => TimeSpan.FromMinutes(45),
-            Timeframe.H1 => TimeSpan.FromHours(4),
-            _ => TimeSpan.FromDays(4) // Accounts for weekends / market holidays in daily bars
-        };
+        var latestBar = recentBars[0];
+        var prevBar = recentBars.Count > 1 ? recentBars[1] : null;
 
-        if (DateTime.UtcNow - latestBar.Timestamp > maxAllowedStaleness)
+        // Freshness guard via central IMarketDataFreshnessPolicy
+        if (!_freshnessPolicy.IsFresh(latestBar))
         {
             _logger.LogWarning("Market data for symbol {SymbolId} is stale (last: {Timestamp}). Aborting signal generation.", symbolId, latestBar.Timestamp);
             return null;
@@ -192,7 +157,7 @@ public class SignalEngine : ISignalEngine
             .OrderBy(p => p.Timestamp)
             .ToListAsync(cancellationToken);
 
-        // Section 9: Insufficient candle history guard
+        // Insufficient candle history guard
         if (history.Count < 20)
         {
             _logger.LogWarning("Insufficient candle history ({Count} bars) for symbol {SymbolId}. Aborting signal generation.", history.Count, symbolId);
@@ -202,45 +167,66 @@ public class SignalEngine : ISignalEngine
         var snapshot = await _technicalService.CalculateAndSaveSnapshotAsync(symbolId, timeframe, cancellationToken);
         if (snapshot == null) return null;
 
-        var scoringResult = _scoringEngine.Evaluate(latestBar, snapshot, history);
-        var signalType = ClassifySignal(scoringResult.Scores.TotalScore, snapshot, history);
+        IndicatorSnapshot? prevSnapshot = null;
+        if (prevBar != null)
+        {
+            prevSnapshot = await _context.IndicatorSnapshots
+                .AsNoTracking()
+                .Where(i => i.SymbolId == symbolId && i.Timeframe == timeframe && i.Timestamp < latestBar.Timestamp)
+                .OrderByDescending(i => i.Timestamp)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        // Unified evaluation pipeline shared directly with BacktestEngine
+        var evalResult = _pipeline.Evaluate(latestBar, snapshot, history, strategy, prevBar, prevSnapshot);
         var risk = CalculateRiskParameters(latestBar.Close, snapshot);
 
         var expiresAt = timeframe switch
         {
+            Timeframe.M1 => DateTime.UtcNow.AddMinutes(15),
+            Timeframe.M5 => DateTime.UtcNow.AddMinutes(45),
             Timeframe.M15 => DateTime.UtcNow.AddHours(2),
+            Timeframe.M30 => DateTime.UtcNow.AddHours(4),
             Timeframe.H1 => DateTime.UtcNow.AddHours(8),
+            Timeframe.H4 => DateTime.UtcNow.AddHours(24),
             _ => DateTime.UtcNow.AddDays(1)
         };
 
         var signal = new Signal
         {
             SymbolId = symbolId,
+            StrategyId = strategy?.Id,
             Timeframe = timeframe,
-            SignalType = signalType,
-            Score = scoringResult.Scores.TotalScore,
-            TrendScore = scoringResult.Scores.TrendScore,
-            MomentumScore = scoringResult.Scores.MomentumScore,
-            VolumeScore = scoringResult.Scores.VolumeScore,
-            StructureScore = scoringResult.Scores.StructureScore,
+            SignalType = evalResult.SignalType,
+            Score = evalResult.TotalScore,
+            TrendScore = evalResult.TrendScore,
+            MomentumScore = evalResult.MomentumScore,
+            VolumeScore = evalResult.VolumeScore,
+            StructureScore = evalResult.StructureScore,
             Price = latestBar.Close,
             StopLoss = risk.StopLoss,
             TakeProfit1 = risk.TakeProfit1,
             TakeProfit2 = risk.TakeProfit2,
             RiskRewardRatio = risk.RiskRewardRatio,
-            Confidence = Math.Round(scoringResult.Scores.TotalScore / 100.0m, 2),
+            Confidence = Math.Round(evalResult.TotalScore / 100.0m, 2),
             ExpiresAt = expiresAt
         };
 
-        foreach (var reason in scoringResult.Reasons)
+        foreach (var rule in evalResult.MatchedRules)
         {
-            signal.Reasons.Add(reason);
+            signal.Reasons.Add(new SignalReason
+            {
+                Code = rule,
+                Title = rule,
+                Description = $"Rule matched: {rule}",
+                Indicator = rule.Split(' ')[0]
+            });
         }
 
         _context.Signals.Add(signal);
         await _context.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Generated {SignalType} signal for Symbol {SymbolId} with Score {Score}.", signalType, symbolId, signal.Score);
+        _logger.LogInformation("Generated {SignalType} signal for Symbol {SymbolId} with Score {Score} via unified pipeline.", evalResult.SignalType, symbolId, signal.Score);
 
         return signal;
     }
@@ -264,7 +250,7 @@ public class SignalEngine : ISignalEngine
 
         if (signal == null)
         {
-            signal = await GenerateAndSaveSignalAsync(sym.Id, timeframe, cancellationToken);
+            signal = await GenerateAndSaveSignalAsync(sym.Id, timeframe, null, cancellationToken);
         }
 
         return signal;

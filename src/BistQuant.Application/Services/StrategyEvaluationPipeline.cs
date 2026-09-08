@@ -28,16 +28,16 @@ public interface IStrategyEvaluationPipeline
 public class StrategyEvaluationPipeline : IStrategyEvaluationPipeline
 {
     private readonly IScoringEngine _scoringEngine;
-    private readonly ISignalEngine _signalEngine;
+    private readonly ISignalClassifier _signalClassifier;
     private readonly IStrategyEngine _strategyEngine;
 
     public StrategyEvaluationPipeline(
         IScoringEngine scoringEngine,
-        ISignalEngine signalEngine,
+        ISignalClassifier signalClassifier,
         IStrategyEngine strategyEngine)
     {
         _scoringEngine = scoringEngine;
-        _signalEngine = signalEngine;
+        _signalClassifier = signalClassifier;
         _strategyEngine = strategyEngine;
     }
 
@@ -50,7 +50,7 @@ public class StrategyEvaluationPipeline : IStrategyEvaluationPipeline
         IndicatorSnapshot? prevSnapshot = null)
     {
         var scoringResult = _scoringEngine.Evaluate(currentBar, snapshot, history);
-        var signalType = _signalEngine.ClassifySignal(scoringResult.Scores.TotalScore, snapshot, history);
+        var signalType = _signalClassifier.ClassifySignal(scoringResult.Scores.TotalScore, snapshot, history);
 
         bool isTriggered;
         List<string> matchedRules;
@@ -60,6 +60,11 @@ public class StrategyEvaluationPipeline : IStrategyEvaluationPipeline
             var stratEval = _strategyEngine.EvaluateRules(strategy.Rules.ToList(), snapshot, currentBar, prevSnapshot, prevBar);
             isTriggered = stratEval.IsSignalTriggered;
             matchedRules = stratEval.MatchedRules;
+
+            if (isTriggered && signalType is not (SignalType.Buy or SignalType.StrongBuy))
+            {
+                signalType = stratEval.MatchedScore >= 50 ? SignalType.StrongBuy : SignalType.Buy;
+            }
         }
         else
         {

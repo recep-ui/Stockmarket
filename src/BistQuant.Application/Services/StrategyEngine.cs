@@ -24,13 +24,13 @@ public interface IStrategyEngine
 
     Task SeedPredefinedStrategiesAsync(CancellationToken cancellationToken = default);
 
-    Task<List<StrategyDto>> GetAllStrategiesAsync(CancellationToken cancellationToken = default);
+    Task<List<StrategyDto>> GetAllStrategiesAsync(long? currentUserId = null, CancellationToken cancellationToken = default);
 
-    Task<StrategyDto?> GetStrategyByIdAsync(int id, CancellationToken cancellationToken = default);
+    Task<StrategyDto?> GetStrategyByIdAsync(int id, long? currentUserId = null, CancellationToken cancellationToken = default);
 
-    Task<StrategyDto> CreateStrategyAsync(CreateStrategyRequest request, CancellationToken cancellationToken = default);
+    Task<StrategyDto> CreateStrategyAsync(CreateStrategyRequest request, long? userId = null, CancellationToken cancellationToken = default);
 
-    Task<bool> DeleteStrategyAsync(int id, CancellationToken cancellationToken = default);
+    Task<bool> DeleteStrategyAsync(int id, long? userId = null, bool isAdmin = false, CancellationToken cancellationToken = default);
 }
 
 public class StrategyEngine : IStrategyEngine
@@ -187,7 +187,7 @@ public class StrategyEngine : IStrategyEngine
 
     public async Task SeedPredefinedStrategiesAsync(CancellationToken cancellationToken = default)
     {
-        if (await _context.Strategies.AnyAsync(cancellationToken)) return;
+        if (await _context.Strategies.AnyAsync(s => s.IsSystem, cancellationToken)) return;
 
         var strategies = new List<Strategy>
         {
@@ -198,6 +198,8 @@ public class StrategyEngine : IStrategyEngine
                 StrategyType = "TrendFollowing",
                 Timeframe = Timeframe.Daily,
                 IsActive = true,
+                IsSystem = true,
+                UserId = null,
                 Rules = new List<StrategyRule>
                 {
                     new() { Indicator = "EMA20", Operator = RuleOperator.GreaterThan, ComparisonIndicator = "EMA50", Weight = 15, IsRequired = true },
@@ -214,6 +216,8 @@ public class StrategyEngine : IStrategyEngine
                 StrategyType = "Momentum",
                 Timeframe = Timeframe.Daily,
                 IsActive = true,
+                IsSystem = true,
+                UserId = null,
                 Rules = new List<StrategyRule>
                 {
                     new() { Indicator = "MACD", Operator = RuleOperator.GreaterThan, ComparisonIndicator = "MACDSignal", Weight = 20, IsRequired = true },
@@ -228,6 +232,8 @@ public class StrategyEngine : IStrategyEngine
                 StrategyType = "Breakout",
                 Timeframe = Timeframe.Daily,
                 IsActive = true,
+                IsSystem = true,
+                UserId = null,
                 Rules = new List<StrategyRule>
                 {
                     new() { Indicator = "Close", Operator = RuleOperator.GreaterThan, ComparisonIndicator = "Resistance1", Weight = 25, IsRequired = true },
@@ -241,6 +247,8 @@ public class StrategyEngine : IStrategyEngine
                 StrategyType = "Reversal",
                 Timeframe = Timeframe.Daily,
                 IsActive = true,
+                IsSystem = true,
+                UserId = null,
                 Rules = new List<StrategyRule>
                 {
                     new() { Indicator = "RSI", Operator = RuleOperator.LessThan, Value = 38, Weight = 20, IsRequired = true },
@@ -251,18 +259,28 @@ public class StrategyEngine : IStrategyEngine
 
         _context.Strategies.AddRange(strategies);
         await _context.SaveChangesAsync(cancellationToken);
-        _logger.LogInformation("Seeded {Count} predefined quantitative strategies.", strategies.Count);
+        _logger.LogInformation("Seeded {Count} predefined quantitative system strategies.", strategies.Count);
     }
 
-    public async Task<List<StrategyDto>> GetAllStrategiesAsync(CancellationToken cancellationToken = default)
+    public async Task<List<StrategyDto>> GetAllStrategiesAsync(long? currentUserId = null, CancellationToken cancellationToken = default)
     {
         await SeedPredefinedStrategiesAsync(cancellationToken);
 
-        var strategies = await _context.Strategies
+        var query = _context.Strategies
             .AsNoTracking()
             .Include(s => s.Rules)
-            .OrderBy(s => s.Id)
-            .ToListAsync(cancellationToken);
+            .AsQueryable();
+
+        if (currentUserId.HasValue)
+        {
+            query = query.Where(s => s.IsSystem || s.UserId == currentUserId.Value);
+        }
+        else
+        {
+            query = query.Where(s => s.IsSystem);
+        }
+
+        var strategies = await query.OrderBy(s => s.Id).ToListAsync(cancellationToken);
 
         return strategies.Select(s => new StrategyDto(
             s.Id,
@@ -271,11 +289,13 @@ public class StrategyEngine : IStrategyEngine
             s.StrategyType,
             s.Timeframe,
             s.IsActive,
-            s.Rules.Select(r => new StrategyRuleDto(r.Id, r.Indicator, r.Operator, r.Value, r.SecondaryValue, r.ComparisonIndicator, r.Weight, r.RuleGroup, r.IsRequired)).ToList()
+            s.Rules.Select(r => new StrategyRuleDto(r.Id, r.Indicator, r.Operator, r.Value, r.SecondaryValue, r.ComparisonIndicator, r.Weight, r.RuleGroup, r.IsRequired)).ToList(),
+            s.UserId,
+            s.IsSystem
         )).ToList();
     }
 
-    public async Task<StrategyDto?> GetStrategyByIdAsync(int id, CancellationToken cancellationToken = default)
+    public async Task<StrategyDto?> GetStrategyByIdAsync(int id, long? currentUserId = null, CancellationToken cancellationToken = default)
     {
         var s = await _context.Strategies
             .AsNoTracking()
@@ -284,6 +304,12 @@ public class StrategyEngine : IStrategyEngine
 
         if (s == null) return null;
 
+        // Custom user strategy: hide if requesting user is neither owner nor admin
+        if (!s.IsSystem && currentUserId.HasValue && s.UserId.HasValue && s.UserId.Value != currentUserId.Value)
+        {
+            return null;
+        }
+
         return new StrategyDto(
             s.Id,
             s.Name,
@@ -291,14 +317,18 @@ public class StrategyEngine : IStrategyEngine
             s.StrategyType,
             s.Timeframe,
             s.IsActive,
-            s.Rules.Select(r => new StrategyRuleDto(r.Id, r.Indicator, r.Operator, r.Value, r.SecondaryValue, r.ComparisonIndicator, r.Weight, r.RuleGroup, r.IsRequired)).ToList()
+            s.Rules.Select(r => new StrategyRuleDto(r.Id, r.Indicator, r.Operator, r.Value, r.SecondaryValue, r.ComparisonIndicator, r.Weight, r.RuleGroup, r.IsRequired)).ToList(),
+            s.UserId,
+            s.IsSystem
         );
     }
 
-    public async Task<StrategyDto> CreateStrategyAsync(CreateStrategyRequest request, CancellationToken cancellationToken = default)
+    public async Task<StrategyDto> CreateStrategyAsync(CreateStrategyRequest request, long? userId = null, CancellationToken cancellationToken = default)
     {
         var strategy = new Strategy
         {
+            UserId = userId,
+            IsSystem = false,
             Name = request.Name,
             Description = request.Description,
             StrategyType = request.StrategyType,
@@ -331,14 +361,31 @@ public class StrategyEngine : IStrategyEngine
             strategy.StrategyType,
             strategy.Timeframe,
             strategy.IsActive,
-            strategy.Rules.Select(r => new StrategyRuleDto(r.Id, r.Indicator, r.Operator, r.Value, r.SecondaryValue, r.ComparisonIndicator, r.Weight, r.RuleGroup, r.IsRequired)).ToList()
+            strategy.Rules.Select(r => new StrategyRuleDto(r.Id, r.Indicator, r.Operator, r.Value, r.SecondaryValue, r.ComparisonIndicator, r.Weight, r.RuleGroup, r.IsRequired)).ToList(),
+            strategy.UserId,
+            strategy.IsSystem
         );
     }
 
-    public async Task<bool> DeleteStrategyAsync(int id, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteStrategyAsync(int id, long? userId = null, bool isAdmin = false, CancellationToken cancellationToken = default)
     {
         var s = await _context.Strategies.FindAsync(new object[] { id }, cancellationToken);
         if (s == null) return false;
+
+        if (s.IsSystem && !isAdmin)
+        {
+            throw new InvalidOperationException("System strategies are protected and cannot be deleted.");
+        }
+
+        if (s.UserId.HasValue && userId.HasValue && s.UserId.Value != userId.Value && !isAdmin)
+        {
+            throw new UnauthorizedAccessException("You do not have permission to delete this strategy.");
+        }
+
+        if (s.UserId.HasValue && !userId.HasValue && !isAdmin)
+        {
+            throw new UnauthorizedAccessException("Authentication required to delete custom strategy.");
+        }
 
         _context.Strategies.Remove(s);
         await _context.SaveChangesAsync(cancellationToken);

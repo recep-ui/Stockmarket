@@ -15,7 +15,6 @@ import {
   Code2,
   ChevronRight
 } from "lucide-react";
-import { getApiBaseUrl } from "@/lib/api";
 
 interface NavItem {
   name: string;

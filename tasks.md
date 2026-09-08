@@ -258,5 +258,52 @@ This document tracks every granular development step required to implement the c
 - [x] Automated Verification:
   - Created `ContractIntegrationTests.cs` testing all 12 core flows against live test server
   - Created `StrategyParityTests.cs` proving 100% parity between live scanner and backtest
-  - Verified full solution test run: 60/60 tests passed (3 Domain, 26 Application, 31 Integration)
-  - Verified Next.js 16 Turbopack production build: 13/13 pages compiled with 0 errors
+  - [x] Verified full solution test run: 60/60 tests passed (3 Domain, 26 Application, 31 Integration)
+  - [x] Verified Next.js 16 Turbopack production build: 13/13 pages compiled with 0 errors
+
+---
+
+## Phase 16: Pre-Live Data Hardening & Security Audit Sprint
+- [x] Secret Sanitization & Rotation:
+  - Created `docs/SECURITY_SECRET_ROTATION.md` detailing rotation procedures for SQL Server, Redis, JWT, Telegram, and Demo user
+  - Sanitized `appsettings.json`, `appsettings.Development.json`, `appsettings.Production.json`, and `Worker/appsettings.json`
+  - Removed plaintext SA password fallback from `DependencyInjection.cs`
+  - Removed hardcoded JWT key fallback from `JwtService.cs` and enforced fail-fast startup in `Program.cs`
+- [x] Deterministic Strategy & Scanner Parity:
+  - Unified evaluation logic between live scanner (`MarketScannerService`) and backtester (`BacktestEngine`) via `IStrategyEvaluationPipeline`
+  - Replaced ad-hoc in-memory assertions with `RealScannerBacktestParityTests.cs` using real database candles and DI service resolution
+- [x] Alert Engine & Telegram Hardening:
+  - Introduced `NotificationDeliveryResult` with explicit `Success`, `Channel`, `MessageId`, and `ErrorMessage`
+  - Updated `AlertEngine.cs` to ensure `LastTriggeredAt` is strictly updated only upon confirmed notification success
+  - Disabled silent simulation in `TelegramNotificationProvider`; simulation allowed only when `Telegram:SimulationMode = true`
+- [x] Worker Heartbeat & Closed-Candle Scheduling:
+  - Created `WorkerHeartbeat` entity, DbSet, and EF Core configurations across SQLite and SQL Server
+  - Implemented `IMarketScanScheduler` with calendar-aware closed candle boundaries for M15, H1, and Daily timeframes
+  - Updated `Worker.cs` to record execution metrics, duration, symbol count, and health heartbeats
+- [x] Market Data Freshness Policy:
+  - Implemented `IMarketDataFreshnessPolicy` with per-timeframe fail-closed thresholds (M1: 3m, M5: 15m, M15: 45m, H1: 3h, Daily: 4d)
+  - Integrated freshness validation into `SignalEngine`, `PaperTradingService`, and `MarketDataFreshnessHealthCheck`
+- [x] Health Checks False-Positive Elimination:
+  - Hardened `RedisHealthCheck`, `WorkerScanHealthCheck`, and `MarketDataFreshnessHealthCheck`
+  - `/health/ready` accurately reflects real operational readiness across all symbols and dependencies
+- [x] Paper Auto-Trading Hardening:
+  - Enforced signal expiration check (`ExpiresAt`), active symbol check (`Symbol.IsActive`), and portfolio cash limits
+  - Enforced deterministic `ClientOrderId` (`AUTO-{portfolioId}-{signalId}`) with database-level duplicate prevention
+- [x] Strategy Ownership & Access Control:
+  - Added `UserId` and `IsSystem` columns to `Strategies` table
+  - Enforced ownership authorization rules in `StrategyEngine` and `StrategiesController`
+  - Protected system strategies from deletion
+- [x] Production Auth Hardening:
+  - Documented production hardening path in `docs/AUTH_PRODUCTION_HARDENING.md`
+  - Added email, password, and display name validation in `AuthService`
+  - Enforced active account checks (`IsActive`) on login
+- [x] Dual-Database Migrations:
+  - Created `20260908081135_HardeningUpdates` for SQLite and `20260908081224_HardeningUpdates` for SQL Server
+  - Maintained provider-specific model snapshots in `BistQuant.Infrastructure`
+- [x] CI/CD Pipeline & Audit:
+  - Added `ci/ci.yml` (ready to place into `.github/workflows/ci.yml` with workflow-scoped token) with backend build/test, frontend lint/build, vulnerability audit, and secret scanning
+  - Validated Docker Compose with `.env.example`
+- [x] Test Suite & Build Verification:
+  - 88/88 solution tests passing (3 Domain, 51 Application, 34 Integration)
+  - Next.js 16 Turbopack production build: 13/13 routes compiled with 0 errors
+  - ESLint: 0 errors

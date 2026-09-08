@@ -70,9 +70,15 @@ Bu doküman, BIST Quant Scanner projesinin **Nihai Entegrasyon & Sözleşme Düz
   * Gap-through stop senaryolarında stop seviyesinin altında açılan barlar doğrudan bar `Open` fiyatından icra edilir.
   * İşlem `ReturnPercent` net komisyon ve slippage düşülerek hesaplanır.
 
-### [ÇÖZÜLDÜ] [BLK-09] Repository Hijyeni
-* **Uygulanan Düzeltme:**
-  * Kök dizine `.gitignore` eklendi; `bin/`, `obj/`, `node_modules/`, `.next/`, `.env*`, `*.db`, `Logs/`, `TestResults/` exclude edildi.
+### [ÇÖZÜLDÜ] [BLK-10] Pre-Live Hardening & Security Audit
+* **Uygulanan Düzeltmeler:**
+  * Gizli anahtarlar temizlendi (`SECURITY_SECRET_ROTATION.md`), fallback parolalar ve JWT anahtarları kaldırıldı, production fail-fast sağlandı.
+  * Gerçek DI ve deterministik veritabanı mumlarıyla `RealScannerBacktestParityTests.cs` oluşturuldu.
+  * Telegram bildirimlerinde `NotificationDeliveryResult` ile onaylı başarı takibi getirildi.
+  * Worker için `IMarketScanScheduler` ile mum kapanış zamanlaması ve `WorkerHeartbeat` veritabanı takibi eklendi.
+  * `IMarketDataFreshnessPolicy` ile zaman dilimi bazlı fail-closed bayatlık kontrolleri entegre edildi.
+  * Stratejilere `UserId` ve `IsSystem` sahiplik kontrolleri eklendi.
+  * `.github/workflows/ci.yml` CI/CD pipeline'ı eklendi.
 
 ---
 
@@ -80,13 +86,13 @@ Bu doküman, BIST Quant Scanner projesinin **Nihai Entegrasyon & Sözleşme Düz
 
 1. **Backend Test Koşusu (`dotnet test BistQuant.slnx -c Release`):**
    * `BistQuant.Domain.Tests`: 3 Passed, 0 Failed
-   * `BistQuant.Application.Tests`: 26 Passed, 0 Failed
-   * `BistQuant.IntegrationTests`: 31 Passed, 0 Failed (12 akışlı ContractIntegrationTests ve StrategyParityTests dahil)
-   * **Toplam: 60/60 Test Geçti (%100 Başarı)**
+   * `BistQuant.Application.Tests`: 51 Passed, 0 Failed
+   * `BistQuant.IntegrationTests`: 34 Passed, 0 Failed (ContractIntegrationTests, StrategyParityTests, RealScannerBacktestParityTests, StrategyOwnershipTests dahil)
+   * **Toplam: 88/88 Test Geçti (%100 Başarı)**
 2. **Frontend Production Build (`npm run build`):**
-   * Next.js 16.3.4 Turbopack: 13/13 sayfa derlendi, 0 TypeScript hatası, 0 Lint hatası.
-3. **Gerçek SQL Server Entegrasyonu:**
-   * SQL Server container (port 1433) üzerinde `InitialCreate` migration'ı başarıyla uygulandı ve doğrulandı.
+   * Next.js 16.3.4 Turbopack: 13/13 sayfa derlendi, 0 TypeScript hatası, 0 Lint hatası (`npm run lint` exit code 0).
+3. **Gerçek SQL Server ve SQLite Dual-Provider:**
+   * SQLite ve SQL Server için `HardeningUpdates` migration'ları başarıyla uygulandı ve doğrulandı.
 
 ---
 

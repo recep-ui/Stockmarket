@@ -24,6 +24,7 @@ public class PaperTradingService : IPaperTradingService
 {
     private readonly IApplicationDbContext _context;
     private readonly ISignalEngine _signalEngine;
+    private readonly IMarketDataFreshnessPolicy _freshnessPolicy;
     private readonly ILogger<PaperTradingService> _logger;
 
     private const decimal CommissionRate = 0.0015m; // 0.15%
@@ -31,10 +32,12 @@ public class PaperTradingService : IPaperTradingService
     public PaperTradingService(
         IApplicationDbContext context,
         ISignalEngine signalEngine,
+        IMarketDataFreshnessPolicy freshnessPolicy,
         ILogger<PaperTradingService> logger)
     {
         _context = context;
         _signalEngine = signalEngine;
+        _freshnessPolicy = freshnessPolicy;
         _logger = logger;
     }
 
@@ -216,7 +219,7 @@ public class PaperTradingService : IPaperTradingService
             throw new InvalidOperationException($"Market price for '{request.Symbol}' is unavailable. Order rejected.");
         }
 
-        if (latestBar.Timestamp < DateTime.UtcNow.AddDays(-7))
+        if (!_freshnessPolicy.IsFresh(latestBar))
         {
             throw new InvalidOperationException($"Market price for '{request.Symbol}' is stale ({latestBar.Timestamp:yyyy-MM-dd}). Order rejected.");
         }
@@ -354,40 +357,75 @@ public class PaperTradingService : IPaperTradingService
             .FirstOrDefaultAsync(p => p.Id == portfolioId, cancellationToken);
 
         if (portfolio == null || !portfolio.IsAutoTradingEnabled) return;
+        if (portfolio.CashBalance <= 0) return;
 
-        var signals = await _context.Signals
+        var now = DateTime.UtcNow;
+
+        var candidateSignals = await _context.Signals
             .Include(s => s.Symbol)
-            .Where(s => s.Score >= portfolio.AutoTradingMinScore && s.Timeframe == Timeframe.Daily)
+            .Where(s => s.Score >= portfolio.AutoTradingMinScore 
+                     && s.Timeframe == Timeframe.Daily 
+                     && s.ExpiresAt > now 
+                     && s.Symbol.IsActive)
             .OrderByDescending(s => s.CreatedAt)
-            .Take(5)
             .ToListAsync(cancellationToken);
 
-        foreach (var sig in signals)
-        {
-            // If we don't already hold this symbol
-            if (!portfolio.Positions.Any(p => p.SymbolId == sig.SymbolId && p.Quantity > 0))
-            {
-                var maxAllocation = portfolio.CashBalance * (portfolio.AutoTradingMaxAllocationPercent / 100.0m);
-                var shares = Math.Floor(maxAllocation / sig.Price);
-                if (shares > 0)
-                {
-                    try
-                    {
-                        await ExecuteOrderAsync(new CreatePaperOrderRequest(
-                            portfolio.Id,
-                            sig.Symbol.Ticker,
-                            OrderSide.Buy,
-                            OrderType.Market,
-                            shares
-                        ), cancellationToken);
+        // Deduplicate: select strictly the latest signal per symbol
+        var latestSignalsPerSymbol = candidateSignals
+            .GroupBy(s => s.SymbolId)
+            .Select(g => g.First())
+            .Take(5)
+            .ToList();
 
-                        _logger.LogInformation("Auto Paper Trade BUY executed for {Ticker} ({Shares} shares at {Price:F2} TL)", sig.Symbol.Ticker, shares, sig.Price);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Auto paper trade failed for {Ticker}", sig.Symbol.Ticker);
-                    }
-                }
+        foreach (var sig in latestSignalsPerSymbol)
+        {
+            // Position rule: skip if already holding a position in this symbol
+            if (portfolio.Positions.Any(p => p.SymbolId == sig.SymbolId && p.Quantity > 0))
+            {
+                continue;
+            }
+
+            // Market data freshness check
+            var latestBar = await _context.PriceBars
+                .AsNoTracking()
+                .Where(p => p.SymbolId == sig.SymbolId && p.Timeframe == Timeframe.Daily)
+                .OrderByDescending(p => p.Timestamp)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (latestBar == null || !_freshnessPolicy.IsFresh(latestBar))
+            {
+                _logger.LogWarning("Auto paper trade skipped for {Ticker}: underlying market data is stale.", sig.Symbol.Ticker);
+                continue;
+            }
+
+            // Sizing based on portfolio equity and allocation limits
+            decimal portfolioEquity = portfolio.CashBalance + portfolio.Positions.Sum(p => p.Quantity * p.CurrentPrice);
+            decimal maxAllocation = Math.Min(portfolio.CashBalance, portfolioEquity * (portfolio.AutoTradingMaxAllocationPercent / 100.0m));
+            if (maxAllocation <= 0 || sig.Price <= 0) continue;
+
+            decimal shares = Math.Floor(maxAllocation / sig.Price);
+            if (shares <= 0) continue;
+
+            // Deterministic ClientOrderId: AUTO-{PortfolioId}-{SignalId} to guarantee idempotency across scan cycles
+            var clientOrderId = $"AUTO-{portfolio.Id}-{sig.Id}";
+
+            try
+            {
+                await ExecuteOrderAsync(new CreatePaperOrderRequest(
+                    portfolio.Id,
+                    sig.Symbol.Ticker,
+                    OrderSide.Buy,
+                    OrderType.Market,
+                    shares,
+                    ClientOrderId: clientOrderId
+                ), cancellationToken);
+
+                _logger.LogInformation("Auto Paper Trade BUY executed for {Ticker} ({Shares} shares at {Price:F2} TL, ClientOrderId: {ClientOrderId})",
+                    sig.Symbol.Ticker, shares, sig.Price, clientOrderId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Auto paper trade failed for {Ticker} (ClientOrderId: {ClientOrderId})", sig.Symbol.Ticker, clientOrderId);
             }
         }
     }

@@ -9,7 +9,6 @@ import {
   Wallet, 
   ChevronRight,
   LogOut,
-  User as UserIcon,
   LogIn
 } from "lucide-react";
 import { AlertsApi, PaperTradingApi, AuthApi, getAuthToken, isMockEnabled, MOCK_NOTIFICATIONS } from "@/lib/api";
@@ -37,10 +36,10 @@ export const Navbar: React.FC = () => {
   useEffect(() => {
     let isMounted = true;
     const token = getAuthToken();
-    setHasToken(!!token);
 
     async function loadData() {
       if (token) {
+        if (isMounted) setHasToken(true);
         try {
           const profile = await AuthApi.getMe();
           if (isMounted && profile) {
@@ -49,6 +48,8 @@ export const Navbar: React.FC = () => {
         } catch {
           // Token expired or invalid
         }
+      } else {
+        if (isMounted) setHasToken(false);
       }
 
       try {
