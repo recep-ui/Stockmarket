@@ -1,0 +1,94 @@
+name: BIST Quant Scanner CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  backend:
+    name: Backend Build & Test (.NET 10)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore Dependencies
+        run: dotnet restore BistQuant.slnx
+
+      - name: Build Solution (Release)
+        run: dotnet build BistQuant.slnx -c Release --no-restore
+
+      - name: Run Test Suite (Release, CI Deterministic)
+        run: dotnet test BistQuant.slnx -c Release --no-build --filter "Category!=OfficialSmokeTest" --verbosity normal
+
+      - name: Vulnerable Package Audit
+        run: dotnet list BistQuant.slnx package --vulnerable --include-transitive
+
+  ef-integrity:
+    name: EF Core Migration Integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install dotnet-ef Tool
+        run: dotnet tool install --global dotnet-ef
+
+      - name: Verify Pending Model Changes (SQLite)
+        run: dotnet ef migrations has-pending-model-changes --project src/BistQuant.Infrastructure --startup-project src/BistQuant.API
+
+      - name: Verify Pending Model Changes (SQL Server)
+        run: EF_PROVIDER=sqlserver dotnet ef migrations has-pending-model-changes --project src/BistQuant.Infrastructure --startup-project src/BistQuant.API
+
+  frontend:
+    name: Frontend Lint & Build (Next.js 16)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install Frontend Dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Lint Frontend Code
+        working-directory: ./frontend
+        run: npm run lint
+
+      - name: Build Frontend Application
+        working-directory: ./frontend
+        run: npm run build
+
+  security:
+    name: Secret & Vulnerability Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository (Full History)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks Secret Scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: false
