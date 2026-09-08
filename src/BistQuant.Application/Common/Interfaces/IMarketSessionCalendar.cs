@@ -33,10 +33,12 @@ public interface IMarketSessionCalendar
     TimeSpan GetMarketOpenTime(DateOnly date);
     TimeSpan GetMarketCloseTime(DateOnly date);
     DateTime GetSessionOpenUtc(DateTime dateUtc);
+    DateTime GetSessionOpenUtc(DateOnly date);
     DateTime GetSessionCloseUtc(DateTime dateUtc);
     DateTime GetSessionCloseUtc(DateOnly date);
     DateTime GetDailyFinalizationUtc(DateTime dateUtc);
     DateTime GetBulletinPublicationTimeUtc(DateOnly date);
+    DateTime GetBulletinCutoffTimeUtc(DateOnly date);
 
     DateOnly GetNextTradingDay(DateOnly date);
     DateOnly GetPreviousTradingDay(DateOnly date);

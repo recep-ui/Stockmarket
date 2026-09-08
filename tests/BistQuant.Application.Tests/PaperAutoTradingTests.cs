@@ -246,4 +246,217 @@ public class PaperAutoTradingTests
         var trades = await context.PaperTrades.Where(t => t.PortfolioId == portfolio.Id).ToListAsync();
         Assert.Empty(trades);
     }
+
+    [Fact]
+    public async Task TPlus1_Execution_FillsAt_ExactSessionOpenUtc_0700_AndPreventsDoubleFill()
+    {
+        using var context = CreateDbContext();
+        var freshnessPolicy = CreateFreshnessPolicy();
+        var mockSignalEngine = new Mock<ISignalEngine>();
+        var calendar = new BistMarketSessionCalendar();
+
+        var user = new User { Email = "tplus1@bistquant.com", DisplayName = "T+1 Trader" };
+        var symbol = new Symbol { Ticker = "THYAO", Name = "Turk Hava Yollari", MarketId = 1, IsActive = true };
+        context.Users.Add(user);
+        context.Symbols.Add(symbol);
+        await context.SaveChangesAsync();
+
+        var portfolio = new PaperPortfolio
+        {
+            UserId = user.Id,
+            Name = "T+1 Portfolio",
+            InitialBalance = 100000m,
+            CashBalance = 100000m,
+            IsAutoTradingEnabled = true
+        };
+        context.PaperPortfolios.Add(portfolio);
+        await context.SaveChangesAsync();
+
+        var targetSession = new DateOnly(2026, 9, 8); // Tuesday
+        var barTimestampUtc = targetSession.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+
+        // Add market stats and price bar for target session
+        context.DailyInstrumentMarketStats.Add(new DailyInstrumentMarketStats
+        {
+            SymbolId = symbol.Id,
+            SessionDate = targetSession,
+            Suspended = false,
+            ClosingSessionPrice = 325.0m
+        });
+
+        context.PriceBars.Add(new PriceBar
+        {
+            SymbolId = symbol.Id,
+            Timeframe = Timeframe.Daily,
+            Timestamp = barTimestampUtc,
+            Open = 322.0m, // Target session Open
+            High = 328.0m,
+            Low = 320.0m,
+            Close = 325.0m,
+            Volume = 10000000m
+        });
+
+        var pendingOrder = new PaperOrder
+        {
+            PortfolioId = portfolio.Id,
+            SymbolId = symbol.Id,
+            ClientOrderId = "TEST_ORDER_001",
+            Side = OrderSide.Buy,
+            Type = OrderType.Market,
+            Status = OrderStatus.PendingNextSessionOpen,
+            Quantity = 100,
+            SignalSessionDate = new DateOnly(2026, 9, 7),
+            TargetExecutionSessionDate = targetSession
+        };
+        context.PaperOrders.Add(pendingOrder);
+        await context.SaveChangesAsync();
+
+        var paperService = new PaperTradingService(context, mockSignalEngine.Object, freshnessPolicy, NullLogger<PaperTradingService>.Instance, calendar);
+
+        // Execute orders for target session
+        int filledCount = await paperService.ExecutePendingOrdersForSessionAsync(targetSession);
+        Assert.Equal(1, filledCount);
+
+        var filledOrder = await context.PaperOrders.FindAsync(pendingOrder.Id);
+        Assert.NotNull(filledOrder);
+        Assert.Equal(OrderStatus.Filled, filledOrder.Status);
+        Assert.Equal(322.0m, filledOrder.FilledPrice);
+        Assert.Equal(targetSession, filledOrder.ExecutedSessionDate);
+
+        // Financial UTC timestamp verification: 10:00 Istanbul must equal 07:00 UTC
+        Assert.NotNull(filledOrder.FilledAt);
+        Assert.Equal(DateTimeKind.Utc, filledOrder.FilledAt.Value.Kind);
+        Assert.Equal(new DateTime(2026, 9, 8, 7, 0, 0, DateTimeKind.Utc), filledOrder.FilledAt.Value);
+
+        var trade = await context.PaperTrades.FirstOrDefaultAsync(t => t.PaperOrderId == filledOrder.Id);
+        Assert.NotNull(trade);
+        Assert.Equal(322.0m, trade.Price);
+        Assert.Equal(new DateTime(2026, 9, 8, 7, 0, 0, DateTimeKind.Utc), trade.ExecutedAt);
+
+        // Repeated execution must NOT double fill
+        int secondExecutionCount = await paperService.ExecutePendingOrdersForSessionAsync(targetSession);
+        Assert.Equal(0, secondExecutionCount);
+    }
+
+    [Fact]
+    public async Task TPlus1_SuspendedStock_ExpiresWithoutTPlus2Carry()
+    {
+        using var context = CreateDbContext();
+        var freshnessPolicy = CreateFreshnessPolicy();
+        var mockSignalEngine = new Mock<ISignalEngine>();
+        var calendar = new BistMarketSessionCalendar();
+
+        var user = new User { Email = "susp@bistquant.com", DisplayName = "Susp Trader" };
+        var symbol = new Symbol { Ticker = "SUSPD", Name = "Suspended Corp", MarketId = 1, IsActive = true };
+        context.Users.Add(user);
+        context.Symbols.Add(symbol);
+        await context.SaveChangesAsync();
+
+        var portfolio = new PaperPortfolio
+        {
+            UserId = user.Id,
+            Name = "Susp Portfolio",
+            CashBalance = 50000m
+        };
+        context.PaperPortfolios.Add(portfolio);
+        await context.SaveChangesAsync();
+
+        var targetSession = new DateOnly(2026, 9, 8);
+        context.DailyInstrumentMarketStats.Add(new DailyInstrumentMarketStats
+        {
+            SymbolId = symbol.Id,
+            SessionDate = targetSession,
+            Suspended = true
+        });
+
+        var pendingOrder = new PaperOrder
+        {
+            PortfolioId = portfolio.Id,
+            SymbolId = symbol.Id,
+            ClientOrderId = "TEST_SUSP_001",
+            Side = OrderSide.Buy,
+            Type = OrderType.Market,
+            Status = OrderStatus.PendingNextSessionOpen,
+            Quantity = 100,
+            TargetExecutionSessionDate = targetSession
+        };
+        context.PaperOrders.Add(pendingOrder);
+        await context.SaveChangesAsync();
+
+        var paperService = new PaperTradingService(context, mockSignalEngine.Object, freshnessPolicy, NullLogger<PaperTradingService>.Instance, calendar);
+        int filled = await paperService.ExecutePendingOrdersForSessionAsync(targetSession);
+
+        Assert.Equal(0, filled);
+        var updated = await context.PaperOrders.FindAsync(pendingOrder.Id);
+        Assert.NotNull(updated);
+        Assert.Equal(OrderStatus.Expired, updated.Status);
+        Assert.NotNull(updated.CancellationReason);
+        Assert.Contains("suspended", updated.CancellationReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task TPlus1_ZeroOrMissingOpen_ExpiresWithoutTPlus2Carry()
+    {
+        using var context = CreateDbContext();
+        var freshnessPolicy = CreateFreshnessPolicy();
+        var mockSignalEngine = new Mock<ISignalEngine>();
+        var calendar = new BistMarketSessionCalendar();
+
+        var user = new User { Email = "noopen@bistquant.com", DisplayName = "NoOpen Trader" };
+        var symbol = new Symbol { Ticker = "NOOPN", Name = "No Open Corp", MarketId = 1, IsActive = true };
+        context.Users.Add(user);
+        context.Symbols.Add(symbol);
+        await context.SaveChangesAsync();
+
+        var portfolio = new PaperPortfolio
+        {
+            UserId = user.Id,
+            Name = "NoOpen Portfolio",
+            CashBalance = 50000m
+        };
+        context.PaperPortfolios.Add(portfolio);
+        await context.SaveChangesAsync();
+
+        var targetSession = new DateOnly(2026, 9, 8);
+        context.DailyInstrumentMarketStats.Add(new DailyInstrumentMarketStats
+        {
+            SymbolId = symbol.Id,
+            SessionDate = targetSession,
+            Suspended = false
+        });
+
+        // PriceBar has Open = 0
+        context.PriceBars.Add(new PriceBar
+        {
+            SymbolId = symbol.Id,
+            Timeframe = Timeframe.Daily,
+            Timestamp = targetSession.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            Open = 0m,
+            High = 0m,
+            Low = 0m,
+            Close = 0m
+        });
+
+        var pendingOrder = new PaperOrder
+        {
+            PortfolioId = portfolio.Id,
+            SymbolId = symbol.Id,
+            ClientOrderId = "TEST_NOOPN_001",
+            Side = OrderSide.Buy,
+            Type = OrderType.Market,
+            Status = OrderStatus.PendingNextSessionOpen,
+            Quantity = 100,
+            TargetExecutionSessionDate = targetSession
+        };
+        context.PaperOrders.Add(pendingOrder);
+        await context.SaveChangesAsync();
+
+        var paperService = new PaperTradingService(context, mockSignalEngine.Object, freshnessPolicy, NullLogger<PaperTradingService>.Instance, calendar);
+        int filled = await paperService.ExecutePendingOrdersForSessionAsync(targetSession);
+
+        Assert.Equal(0, filled);
+        var updated = await context.PaperOrders.FindAsync(pendingOrder.Id);
+        Assert.NotNull(updated);
+        Assert.Equal(OrderStatus.Expired, updated.Status);
+    }
 }

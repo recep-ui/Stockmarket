@@ -4,7 +4,10 @@ public static class BistBulletinSchemaV114
 {
     public const string Version = "1.14";
 
-    // Standard 0-based column constants per official BIST specification v1.14
+    // Standard 0-based column constants per official BIST specification v1.14:
+    // 1 DATE 2 INSTRUMENT SERIES CODE ... 18 OPENING PRICE 19 OPENING SESSION PRICE 20 MIDDAY PRICE
+    // 21 LOWEST PRICE 22 HIGHEST PRICE 23 CLOSING PRICE 24 CLOSING SESSION PRICE 25 CHANGE ...
+    // 28 VWAP 29 TOTAL TRADED VALUE 30 TOTAL TRADED VOLUME 31 TOTAL NUMBER OF CONTRACTS 32 REFERENCE PRICE
     public const int Date = 0;
     public const int SeriesCode = 1;
     public const int InstrumentName = 2;
@@ -24,33 +27,24 @@ public static class BistBulletinSchemaV114
     public const int PreviousLastPrice = 16;
     public const int Open = 17;
     public const int OpeningSessionPrice = 18;
-    public const int Low = 19; // In official v1.14 thb format index 19 is LOWEST PRICE
-    public const int High = 20; // In official v1.14 thb format index 20 is HIGHEST PRICE
-    public const int Close = 21; // In official v1.14 thb format index 21 is CLOSING PRICE
-    public const int ClosingSessionPrice = 22;
-    public const int ChangePercent = 23;
-    public const int RemainingBid = 24;
-    public const int RemainingAsk = 25;
-    public const int Vwap = 26;
-    public const int TotalTradedValue = 27;
-    public const int TotalTradedVolume = 28;
-    public const int TotalNumberOfContracts = 29;
-    public const int ReferencePrice = 30;
+    public const int MiddayPrice = 19;
+    public const int Low = 20;
+    public const int High = 21;
+    public const int Close = 22;
+    public const int ClosingSessionPrice = 23;
+    public const int ChangePercent = 24;
+    public const int RemainingBid = 25;
+    public const int RemainingAsk = 26;
+    public const int Vwap = 27;
+    public const int TotalTradedValue = 28;
+    public const int TotalTradedVolume = 29;
+    public const int TotalNumberOfContracts = 30;
+    public const int ReferencePrice = 31;
 
     public const int MinimumColumnCount = 31;
 
-    // Alternate standard positions when MIDDAY PRICE exists (older 57-column variant)
-    public const int AlternateLow = 20;
-    public const int AlternateHigh = 21;
-    public const int AlternateClose = 22;
-    public const int AlternateClosingSessionPrice = 23;
-    public const int AlternateChangePercent = 24;
-    public const int AlternateVwap = 27;
-    public const int AlternateTotalTradedValue = 28;
-    public const int AlternateTotalTradedVolume = 29;
-    public const int AlternateTotalNumberOfContracts = 30;
-
     // Expected required header concepts (English & Turkish)
+    // Strict separation: Volume (shares/lots) is required and cannot be satisfied by Value (TL)
     public static readonly string[] RequiredHeaderConcepts = new[]
     {
         "DATE",
@@ -60,7 +54,7 @@ public static class BistBulletinSchemaV114
         "LOWEST PRICE",
         "HIGHEST PRICE",
         "CLOSING PRICE",
-        "VOLUME"
+        "TOTAL TRADED VOLUME"
     };
 
     public static readonly string[] RequiredHeaderConceptsTr = new[]
@@ -72,6 +66,6 @@ public static class BistBulletinSchemaV114
         "EN DUSUK FIYAT",
         "EN YUKSEK FIYAT",
         "KAPANIS FIYATI",
-        "HACMI"
+        "TOPLAM ISLEM ADEDI"
     };
 }

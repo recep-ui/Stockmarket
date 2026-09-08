@@ -157,8 +157,8 @@ namespace BistQuant.Infrastructure.Migrations.Sqlite
                     Id = table.Column<long>(type: "INTEGER", nullable: false)
                         .Annotation("Sqlite:Autoincrement", true),
                     SessionDate = table.Column<DateOnly>(type: "TEXT", nullable: false),
-                    AttemptedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    NextAttemptAt = table.Column<DateTime>(type: "TEXT", nullable: true),
+                    AttemptedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    NextAttemptAtUtc = table.Column<DateTime>(type: "TEXT", nullable: true),
                     AttemptCount = table.Column<int>(type: "INTEGER", nullable: false),
                     Status = table.Column<byte>(type: "INTEGER", nullable: false),
                     HttpStatusCode = table.Column<int>(type: "INTEGER", nullable: true),
@@ -178,7 +178,7 @@ namespace BistQuant.Infrastructure.Migrations.Sqlite
             migrationBuilder.CreateIndex(
                 name: "IX_BulletinFetchAttempts_SessionDate_AttemptedAtUtc",
                 table: "BulletinFetchAttempts",
-                columns: new[] { "SessionDate", "AttemptedAt" });
+                columns: new[] { "SessionDate", "AttemptedAtUtc" });
 
             migrationBuilder.CreateTable(
                 name: "IndicatorContinuityWarnings",

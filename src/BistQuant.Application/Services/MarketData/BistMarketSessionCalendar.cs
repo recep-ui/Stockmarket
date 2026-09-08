@@ -7,6 +7,7 @@ namespace BistQuant.Application.Services.MarketData;
 public class BistMarketSessionCalendar : IMarketSessionCalendar
 {
     private readonly IHolidayCalendar _holidayCalendar;
+    private readonly IConfiguration? _configuration;
     private readonly TimeZoneInfo _istanbulTz;
     private readonly TimeSpan _openTime;
     private readonly TimeSpan _closeTime;
@@ -19,6 +20,7 @@ public class BistMarketSessionCalendar : IMarketSessionCalendar
 
     public BistMarketSessionCalendar(IConfiguration? configuration = null, IHolidayCalendar? holidayCalendar = null)
     {
+        _configuration = configuration;
         _holidayCalendar = holidayCalendar ?? new ConfigurableHolidayCalendar(configuration);
 
         var tzId = configuration?["BistSession:TimeZone"] ?? "Europe/Istanbul";
@@ -129,6 +131,13 @@ public class BistMarketSessionCalendar : IMarketSessionCalendar
         return ToUtc(localOpen);
     }
 
+    public DateTime GetSessionOpenUtc(DateOnly date)
+    {
+        var openTime = GetMarketOpenTime(date);
+        var localOpen = date.ToDateTime(TimeOnly.FromTimeSpan(openTime));
+        return ToUtc(localOpen);
+    }
+
     public DateTime GetSessionCloseUtc(DateTime dateUtc)
     {
         var local = ToLocal(dateUtc);
@@ -161,6 +170,19 @@ public class BistMarketSessionCalendar : IMarketSessionCalendar
         var pubTime = closeTime.Add(TimeSpan.FromMinutes(25));
         var localPub = date.ToDateTime(TimeOnly.FromTimeSpan(pubTime));
         return ToUtc(localPub);
+    }
+
+    public DateTime GetBulletinCutoffTimeUtc(DateOnly date)
+    {
+        var isHalf = IsHalfDay(date);
+        var cutoffStr = isHalf
+            ? (_configuration?["BistBulletin:HalfDayCutoff"] ?? "16:00:00")
+            : (_configuration?["BistBulletin:FullDayCutoff"] ?? "21:00:00");
+        var cutoffTime = TimeSpan.TryParse(cutoffStr, out var ct)
+            ? ct
+            : (isHalf ? new TimeSpan(16, 0, 0) : new TimeSpan(21, 0, 0));
+        var localCutoff = date.ToDateTime(TimeOnly.FromTimeSpan(cutoffTime));
+        return ToUtc(localCutoff);
     }
 
     public DateOnly GetNextTradingDay(DateOnly date)

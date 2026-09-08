@@ -482,8 +482,24 @@ public class PaperTradingService : IPaperTradingService
 
         int filledCount = 0;
         var barTimestampUtc = sessionDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-        var marketOpenTime = _sessionCalendar?.GetMarketOpenTime(sessionDate) ?? new TimeSpan(10, 0, 0);
-        var fillTimestampUtc = sessionDate.ToDateTime(TimeOnly.FromTimeSpan(marketOpenTime), DateTimeKind.Utc);
+        DateTime fillTimestampUtc;
+        if (_sessionCalendar != null)
+        {
+            fillTimestampUtc = _sessionCalendar.GetSessionOpenUtc(sessionDate);
+        }
+        else
+        {
+            var localOpen = sessionDate.ToDateTime(new TimeOnly(10, 0, 0));
+            try
+            {
+                var tz = TimeZoneInfo.FindSystemTimeZoneById("Europe/Istanbul");
+                fillTimestampUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localOpen, DateTimeKind.Unspecified), tz);
+            }
+            catch
+            {
+                fillTimestampUtc = DateTime.SpecifyKind(localOpen.AddHours(-3), DateTimeKind.Utc);
+            }
+        }
 
         foreach (var order in pendingOrders)
         {
@@ -500,7 +516,9 @@ public class PaperTradingService : IPaperTradingService
                 _logger.LogInformation("Order {OrderId} for {Ticker} cannot fill on target session {SessionDate}: suspended or no valid open price. Order expired (no T+2 carry).",
                     order.Id, order.Symbol.Ticker, sessionDate);
                 order.Status = OrderStatus.Expired;
-                order.CancellationReason = "No valid opening price on target execution session.";
+                order.CancellationReason = stats?.Suspended == true
+                    ? "Symbol was suspended on target execution session (no T+2 carry)."
+                    : "No valid opening price on target execution session (no T+2 carry).";
                 continue;
             }
 

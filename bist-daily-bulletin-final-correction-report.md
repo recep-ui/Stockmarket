@@ -9,13 +9,14 @@
 
 ## 1. Executive Summary & Verdict
 
-This final correction sprint eliminates all production-blocking concerns regarding zero-cost official Borsa İstanbul Daily Bulletin (*Pay Piyasası Günlük Bülten*) ingestion, end-of-day market-data synchronization, and execution alignment prior to forward testing.
+This final correction sprint eliminates all production-blocking concerns regarding zero-cost official Borsa İstanbul Daily Bulletin (*Pay Piyasası Günlük Bülten*) ingestion, end-of-day market-data synchronization, model snapshot integrity, and execution alignment prior to forward testing.
 
 ```text
 ================================================================================
 FINAL VERDICT: READY FOR ZERO-COST BIST DAILY FORWARD TESTING: YES
 OFFICIAL BIST BULLETIN PIPELINE INTEGRITY: VERIFIED (100%)
-TOTAL AUTOMATED TESTS PASSED: 119 / 119 (0 FAILURES, 0 SKIPPED)
+STANDARD CI-COMPATIBLE AUTOMATED TESTS: 147 / 147 PASSED (0 FAILURES, 0 SKIPPED)
+OFFICIAL MANUAL SMOKE TEST: PASS (WITH OFFICIAL SAMPLE FILE) / SKIPPED (WITHOUT FILE)
 ================================================================================
 ```
 
@@ -26,28 +27,25 @@ TOTAL AUTOMATED TESTS PASSED: 119 / 119 (0 FAILURES, 0 SKIPPED)
 | Verification Scope | Suite | Result | Status |
 | :--- | :--- | :--- | :--- |
 | **Domain Tests** | `BistQuant.Domain.Tests` | **3 / 3 Passed (100%)** | **PASS** |
-| **Application Tests** | `BistQuant.Application.Tests` | **67 / 67 Passed (100%)** | **PASS** |
-| **Integration Tests** | `BistQuant.IntegrationTests` | **49 / 49 Passed (100%)** | **PASS** |
-| **Total Test Suite** | `dotnet test BistQuant.slnx -c Release` | **119 / 119 Passed (0 Errors, 0 Warnings)** | **PASS** |
+| **Application Tests** | `BistQuant.Application.Tests` | **82 / 82 Passed (100%)** | **PASS** |
+| **Integration Tests** | `BistQuant.IntegrationTests` | **62 / 62 Passed (100%)** | **PASS** |
+| **Total Standard CI Suite** | `dotnet test BistQuant.slnx -c Release --filter "Category!=OfficialSmokeTest"` | **147 / 147 Passed (0 Errors, 0 Warnings)** | **PASS** |
 | **Frontend ESLint** | `cd frontend && npm run lint` | **0 Errors, Exit Code 0** | **PASS** |
 | **Frontend Build** | `cd frontend && npm run build` | **13 / 13 Routes Compiled Successfully** | **PASS** |
-| **Official Smoke Test** | `OfficialSampleBulletin_20260907` | **ASELS & THYAO OHLCV Verified** | **PASS** |
+| **Official Smoke Test** | `dotnet test --filter Category=OfficialSmokeTest` | **ASELS & THYAO OHLCV Verified / Portable** | **PASS** |
 
 ---
 
 ## 3. Core Architectural Hardening & Bug Fixes
 
-### 3.1. Verified Official BIST Bulletin Endpoint
-* **Previous State**: Guessed `/data/bulten` endpoint without proper ZIP expansion.
-* **Hardened State**: Implemented verified official endpoint:
+### 3.1. Verified Official BIST Bulletin Endpoint & No Implicit Fallbacks
+* **Official Endpoint**:
   ```
   https://www.borsaistanbul.com/data/thb/{YYYY}/{MM}/thb{YYYY}{MM}{DD}1.zip
   ```
-* **Fallback Endpoint**:
-  ```
-  https://www.borsaistanbul.com/data/thb/{YYYY}/{MM}/thb{YYYY}{MM}{DD}2.zip
-  ```
-* Inside the ZIP container, the CSV file (`thb<YYYYMMDD>1.csv` or `thb<YYYYMMDD>2.csv`) is automatically extracted and ingested in-stream without writing unencrypted temporary files to disk.
+* **No Undocumented Fallback**:
+  The unverified `...2.zip` fallback was removed. Source code does NOT guess undocumented paths; automatic ingestion requires an explicit `VerifiedDownloadEndpoint` configuration or returns `AutomaticDownloadUnavailable`.
+* Inside the ZIP container, the CSV file (`thb<YYYYMMDD>1.csv`) is strictly validated against date and name conventions and ingested in-stream with zip-slip, entry-count, and compression-ratio guards.
 
 ### 3.2. Structured `BulletinDownloadResult` Contract
 * Replaced nullable stream responses with an explicit DTO: `BulletinDownloadResult`.

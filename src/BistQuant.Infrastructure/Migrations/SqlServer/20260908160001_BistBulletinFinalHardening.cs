@@ -165,8 +165,8 @@ namespace BistQuant.Infrastructure.Migrations.SqlServer
                     Id = table.Column<long>(type: "bigint", nullable: false)
                         .Annotation("SqlServer:Identity", "1, 1"),
                     SessionDate = table.Column<DateOnly>(type: "date", nullable: false),
-                    AttemptedAt = table.Column<DateTime>(type: "datetime2", nullable: false),
-                    NextAttemptAt = table.Column<DateTime>(type: "datetime2", nullable: true),
+                    AttemptedAtUtc = table.Column<DateTime>(type: "datetime2", nullable: false),
+                    NextAttemptAtUtc = table.Column<DateTime>(type: "datetime2", nullable: true),
                     AttemptCount = table.Column<int>(type: "int", nullable: false),
                     Status = table.Column<byte>(type: "tinyint", nullable: false),
                     HttpStatusCode = table.Column<int>(type: "int", nullable: true),
@@ -186,7 +186,7 @@ namespace BistQuant.Infrastructure.Migrations.SqlServer
             migrationBuilder.CreateIndex(
                 name: "IX_BulletinFetchAttempts_SessionDate_AttemptedAtUtc",
                 table: "BulletinFetchAttempts",
-                columns: new[] { "SessionDate", "AttemptedAt" });
+                columns: new[] { "SessionDate", "AttemptedAtUtc" });
 
             migrationBuilder.CreateTable(
                 name: "IndicatorContinuityWarnings",

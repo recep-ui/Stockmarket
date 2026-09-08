@@ -56,8 +56,7 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         _sessionCalendar = sessionCalendar;
         _sessionDateResolver = sessionDateResolver;
 
-        _verifiedEndpointTemplate = _configuration["BistBulletin:VerifiedDownloadEndpoint"]
-            ?? "https://www.borsaistanbul.com/data/thb/{YYYY}/{MM}/thb{YYYY}{MM}{DD}1.zip";
+        _verifiedEndpointTemplate = _configuration["BistBulletin:VerifiedDownloadEndpoint"] ?? string.Empty;
         _autoDownloadEnabled = _configuration.GetValue<bool?>("BistBulletin:AutomaticDownloadEnabled") ?? true;
 
         var configuredPath = _configuration["BistBulletin:StoragePath"] ?? "/app/data/marketdata";
@@ -202,10 +201,10 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
             var attempt = new BulletinFetchAttempt
             {
                 SessionDate = date,
-                SourceUrl = "disabled",
+                SourceUrl = "unconfigured",
                 AttemptedAtUtc = DateTime.UtcNow,
                 Status = BulletinDownloadStatus.AutomaticDownloadUnavailable,
-                ErrorMessage = "Automatic download is disabled or unconfigured."
+                ErrorMessage = "Automatic bulletin download is not configured or disabled. BistBulletin:VerifiedDownloadEndpoint must be explicitly configured."
             };
             _context.BulletinFetchAttempts.Add(attempt);
             await _context.SaveChangesAsync(cancellationToken);
@@ -228,6 +227,39 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
             {
                 _logger.LogInformation("Bulletin publication window for {Date} not reached yet (Scheduled: {PubTime:HH:mm} UTC).", date, pubTimeUtc);
                 return BulletinDownloadResult.NotPublishedYet(date, 0, $"Bulletin publication time ({pubTimeUtc:HH:mm} UTC) not reached yet.");
+            }
+
+            // Publication Cutoff enforcement (FullDay: 21:00 TRT, HalfDay: 16:00 TRT)
+            var cutoffTimeUtc = _sessionCalendar.GetBulletinCutoffTimeUtc(date);
+            if (DateTime.UtcNow > cutoffTimeUtc)
+            {
+                _logger.LogInformation("Bulletin publication cutoff ({CutoffTime:HH:mm} UTC) passed for session {Date}. Stopping automatic attempts.", cutoffTimeUtc, date);
+                var cutoffAttempt = new BulletinFetchAttempt
+                {
+                    SessionDate = date,
+                    SourceUrl = _verifiedEndpointTemplate
+                        .Replace("{YYYY}", date.ToString("yyyy"))
+                        .Replace("{MM}", date.ToString("MM"))
+                        .Replace("{DD}", date.ToString("dd")),
+                    AttemptedAtUtc = DateTime.UtcNow,
+                    Status = BulletinDownloadStatus.NotPublishedYet,
+                    ErrorMessage = $"Publication cutoff ({cutoffTimeUtc:HH:mm} UTC) has passed for session {date:yyyy-MM-dd}. Automatic attempts stopped. Manual import remains available."
+                };
+                _context.BulletinFetchAttempts.Add(cutoffAttempt);
+
+                var prev = await _context.MarketDataImports
+                    .Where(i => i.Provider == Capabilities.ProviderName && i.SessionDate == date)
+                    .OrderByDescending(i => i.Id)
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                if (prev != null)
+                {
+                    prev.NextAttemptAt = null; // Do not retry overnight
+                    prev.ErrorMessage = cutoffAttempt.ErrorMessage;
+                }
+                await _context.SaveChangesAsync(cancellationToken);
+
+                return BulletinDownloadResult.NotPublishedYet(date, 404, cutoffAttempt.ErrorMessage);
             }
         }
 
@@ -268,43 +300,62 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
             fetchAttempt.ElapsedMs = sw.ElapsedMilliseconds;
             fetchAttempt.Status = BulletinDownloadStatus.ProviderUnavailable;
             fetchAttempt.ErrorMessage = $"Network error: {ex.Message}";
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
 
-            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 0, ex.Message, cancellationToken);
+            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 0, ex.Message, null, cancellationToken);
             return BulletinDownloadResult.ProviderUnavailable(date, 0, ex.Message);
         }
 
         sw.Stop();
         fetchAttempt.ElapsedMs = sw.ElapsedMilliseconds;
-        fetchAttempt.HttpStatus = (int)response.StatusCode;
+        fetchAttempt.HttpStatusCode = (int)response.StatusCode;
 
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
             fetchAttempt.Status = BulletinDownloadStatus.NotPublishedYet;
             fetchAttempt.ErrorMessage = "HTTP 404 - Bulletin not published yet.";
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
 
-            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 404, fetchAttempt.ErrorMessage, cancellationToken);
+            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 404, fetchAttempt.ErrorMessage, null, cancellationToken);
             return BulletinDownloadResult.NotPublishedYet(date, 404, $"HTTP 404 - Bulletin for session {date:yyyy-MM-dd} is not published yet.");
         }
 
         if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {
+            TimeSpan? retryAfter = null;
+            if (response.Headers.RetryAfter != null)
+            {
+                if (response.Headers.RetryAfter.Delta.HasValue)
+                {
+                    retryAfter = response.Headers.RetryAfter.Delta.Value;
+                }
+                else if (response.Headers.RetryAfter.Date.HasValue)
+                {
+                    var diff = response.Headers.RetryAfter.Date.Value - DateTimeOffset.UtcNow;
+                    retryAfter = diff > TimeSpan.Zero ? diff : TimeSpan.FromSeconds(30);
+                }
+            }
+
+            var effectiveRetryAfter = retryAfter ?? TimeSpan.FromMinutes(15);
             fetchAttempt.Status = BulletinDownloadStatus.RateLimited;
-            fetchAttempt.ErrorMessage = "HTTP 429 - Rate limited by BIST provider.";
+            fetchAttempt.ErrorMessage = $"HTTP 429 - Rate limited by BIST provider. Retry-After: {effectiveRetryAfter.TotalSeconds}s.";
+            fetchAttempt.NextAttemptAtUtc = DateTime.UtcNow.Add(effectiveRetryAfter);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
 
-            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 429, fetchAttempt.ErrorMessage, cancellationToken);
-            return BulletinDownloadResult.RateLimited(date, 429, "HTTP 429 - Rate limited by provider.");
+            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 429, fetchAttempt.ErrorMessage, effectiveRetryAfter, cancellationToken);
+            return BulletinDownloadResult.RateLimited(date, 429, fetchAttempt.ErrorMessage, effectiveRetryAfter);
         }
 
         if ((int)response.StatusCode >= 500)
         {
             fetchAttempt.Status = BulletinDownloadStatus.ProviderUnavailable;
             fetchAttempt.ErrorMessage = $"HTTP {(int)response.StatusCode} - Provider server error.";
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
 
-            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, (int)response.StatusCode, fetchAttempt.ErrorMessage, cancellationToken);
+            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, (int)response.StatusCode, fetchAttempt.ErrorMessage, null, cancellationToken);
             return BulletinDownloadResult.ProviderUnavailable(date, (int)response.StatusCode, $"Provider returned HTTP {(int)response.StatusCode}.");
         }
 
@@ -312,9 +363,10 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         {
             fetchAttempt.Status = BulletinDownloadStatus.Failed;
             fetchAttempt.ErrorMessage = $"HTTP {(int)response.StatusCode} - Unexpected status code.";
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
 
-            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, (int)response.StatusCode, fetchAttempt.ErrorMessage, cancellationToken);
+            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, (int)response.StatusCode, fetchAttempt.ErrorMessage, null, cancellationToken);
             return BulletinDownloadResult.Failed(date, (int)response.StatusCode, $"Unexpected HTTP {(int)response.StatusCode}.");
         }
 
@@ -325,12 +377,13 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         {
             fetchAttempt.Status = BulletinDownloadStatus.InvalidSourceContent;
             fetchAttempt.ErrorMessage = "Received empty response from server.";
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
-            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 200, fetchAttempt.ErrorMessage, cancellationToken);
+            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 200, fetchAttempt.ErrorMessage, null, cancellationToken);
             return BulletinDownloadResult.InvalidSourceContent(date, 200, "Empty payload received.");
         }
 
-        // Validate content: not HTML
+        // Validate content: not HTML/XML
         var preview = Encoding.UTF8.GetString(rawBytes.Take(Math.Min(rawBytes.Length, 256)).ToArray()).TrimStart();
         if (preview.StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) ||
             preview.StartsWith("<html", StringComparison.OrdinalIgnoreCase) ||
@@ -338,8 +391,9 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         {
             fetchAttempt.Status = BulletinDownloadStatus.InvalidSourceContent;
             fetchAttempt.ErrorMessage = "Received HTML/XML content instead of bulletin ZIP/CSV.";
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
-            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 200, fetchAttempt.ErrorMessage, cancellationToken);
+            await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 200, fetchAttempt.ErrorMessage, null, cancellationToken);
             return BulletinDownloadResult.InvalidSourceContent(date, 200, "Received HTML/XML response page instead of valid bulletin data.");
         }
 
@@ -349,14 +403,19 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
 
         if (isZip)
         {
-            using var csvMs = ExtractCsvFromZip(rawBytes);
+            using var csvMs = ExtractCsvFromZip(rawBytes, date, out var zipError);
             if (csvMs == null)
             {
-                fetchAttempt.Status = BulletinDownloadStatus.InvalidSourceContent;
-                fetchAttempt.ErrorMessage = "Could not extract valid CSV from ZIP archive.";
+                fetchAttempt.Status = zipError != null && zipError.Contains("does not match requested session date", StringComparison.OrdinalIgnoreCase)
+                    ? BulletinDownloadStatus.DateMismatch
+                    : BulletinDownloadStatus.InvalidSourceContent;
+                fetchAttempt.ErrorMessage = zipError ?? "Could not extract valid CSV from ZIP archive.";
+                fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
                 _context.BulletinFetchAttempts.Add(fetchAttempt);
-                await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 200, fetchAttempt.ErrorMessage, cancellationToken);
-                return BulletinDownloadResult.InvalidSourceContent(date, 200, "ZIP archive did not contain a valid CSV bulletin file.");
+                await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 200, fetchAttempt.ErrorMessage, null, cancellationToken);
+                return fetchAttempt.Status == BulletinDownloadStatus.DateMismatch
+                    ? BulletinDownloadResult.Failed(date, 200, fetchAttempt.ErrorMessage)
+                    : BulletinDownloadResult.InvalidSourceContent(date, 200, fetchAttempt.ErrorMessage);
             }
             extractedCsvBytes = csvMs.ToArray();
         }
@@ -381,6 +440,7 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         BulletinDownloadStatus status,
         int httpStatus,
         string errorMessage,
+        TimeSpan? explicitRetryAfter,
         CancellationToken cancellationToken)
     {
         var targetImport = existingImport ?? new MarketDataImport
@@ -388,10 +448,12 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
             Provider = Capabilities.ProviderName,
             SessionDate = date,
             SourceFileName = $"thb{date:yyyyMMdd}1.zip",
-            SourceUrl = _verifiedEndpointTemplate
-                .Replace("{YYYY}", date.ToString("yyyy"))
-                .Replace("{MM}", date.ToString("MM"))
-                .Replace("{DD}", date.ToString("dd")),
+            SourceUrl = string.IsNullOrWhiteSpace(_verifiedEndpointTemplate)
+                ? "unconfigured"
+                : _verifiedEndpointTemplate
+                    .Replace("{YYYY}", date.ToString("yyyy"))
+                    .Replace("{MM}", date.ToString("MM"))
+                    .Replace("{DD}", date.ToString("dd")),
             Status = MarketDataImportStatus.Failed
         };
 
@@ -401,8 +463,8 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         targetImport.LastAttemptAt = DateTime.UtcNow;
         targetImport.AttemptCount++;
 
-        var backoffMinutes = Math.Min(30, 5 * targetImport.AttemptCount);
-        targetImport.NextAttemptAt = DateTime.UtcNow.AddMinutes(backoffMinutes);
+        var nextAttempt = CalculateNextAttempt(status, targetImport.AttemptCount, explicitRetryAfter);
+        targetImport.NextAttemptAt = nextAttempt;
 
         if (existingImport == null)
         {
@@ -410,6 +472,46 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         }
 
         await _context.SaveChangesAsync(cancellationToken);
+    }
+
+    private static DateTime? CalculateNextAttempt(BulletinDownloadStatus status, int attemptCount, TimeSpan? explicitRetryAfter)
+    {
+        var now = DateTime.UtcNow;
+        switch (status)
+        {
+            case BulletinDownloadStatus.RateLimited:
+                return now.Add(explicitRetryAfter ?? TimeSpan.FromMinutes(15));
+
+            case BulletinDownloadStatus.NotPublishedYet:
+                return now.AddMinutes(10);
+
+            case BulletinDownloadStatus.ProviderUnavailable:
+            case BulletinDownloadStatus.Failed:
+                int minutes = attemptCount switch
+                {
+                    <= 1 => 1,
+                    2 => 2,
+                    3 => 5,
+                    4 => 10,
+                    5 => 20,
+                    _ => 30
+                };
+                return now.AddMinutes(minutes);
+
+            case BulletinDownloadStatus.InvalidSourceContent:
+                // Limited retry: up to 3 attempts, then stop
+                if (attemptCount >= 3)
+                {
+                    return null;
+                }
+                return now.AddMinutes(15);
+
+            case BulletinDownloadStatus.SchemaMismatch:
+            case BulletinDownloadStatus.DateMismatch:
+            case BulletinDownloadStatus.AutomaticDownloadUnavailable:
+            default:
+                return null; // NO automatic retry
+        }
     }
 
     public async Task<MarketDataImport> ImportBulletinForDateAsync(DateOnly date, bool force = false, CancellationToken cancellationToken = default)
@@ -529,9 +631,10 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
             (rawBytes.Length > 4 && rawBytes[0] == 0x50 && rawBytes[1] == 0x4B))
         {
-            decompressedStream = ExtractCsvFromZip(rawBytes);
+            decompressedStream = ExtractCsvFromZip(rawBytes, targetDate, out var zipError);
             if (decompressedStream == null)
             {
+                bool isDateErr = zipError != null && zipError.Contains("does not match requested session date", StringComparison.OrdinalIgnoreCase);
                 var errImport = new MarketDataImport
                 {
                     Provider = Capabilities.ProviderName,
@@ -540,8 +643,9 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
                     SourceUrl = sourceUrl,
                     Sha256 = sha256,
                     ContentLength = rawBytes.Length,
-                    Status = MarketDataImportStatus.Failed,
-                    ErrorMessage = "No valid CSV found inside zip archive."
+                    Status = isDateErr ? MarketDataImportStatus.DateMismatch : MarketDataImportStatus.Failed,
+                    DownloadStatus = isDateErr ? BulletinDownloadStatus.DateMismatch : BulletinDownloadStatus.InvalidSourceContent,
+                    ErrorMessage = zipError ?? "No valid CSV found inside zip archive."
                 };
                 _context.MarketDataImports.Add(errImport);
                 await _context.SaveChangesAsync(cancellationToken);
@@ -564,15 +668,18 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
                 SourceUrl = sourceUrl,
                 Sha256 = sha256,
                 ContentLength = rawBytes.Length,
-                Status = MarketDataImportStatus.Failed,
-                ErrorMessage = "Could not detect session date from bulletin."
+                Status = parseResult.IsSchemaMismatch ? MarketDataImportStatus.SchemaMismatch : MarketDataImportStatus.Failed,
+                DownloadStatus = parseResult.IsSchemaMismatch ? BulletinDownloadStatus.SchemaMismatch : BulletinDownloadStatus.Failed,
+                ErrorMessage = parseResult.Errors.Count > 0
+                    ? string.Join("; ", parseResult.Errors)
+                    : "Could not detect session date from bulletin."
             };
             _context.MarketDataImports.Add(errImport);
             await _context.SaveChangesAsync(cancellationToken);
             return errImport;
         }
 
-        if (parseResult.Errors.Any(e => e.Contains("date mismatch", StringComparison.OrdinalIgnoreCase)))
+        if (parseResult.IsDateMismatch)
         {
             _logger.LogError("Bulletin date mismatch for target date {TargetDate}: {Errors}",
                 sessionDate.Value, string.Join("; ", parseResult.Errors));
@@ -586,11 +693,34 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
                 Sha256 = sha256,
                 ContentLength = rawBytes.Length,
                 Status = MarketDataImportStatus.DateMismatch,
+                DownloadStatus = BulletinDownloadStatus.DateMismatch,
                 ErrorMessage = string.Join("; ", parseResult.Errors)
             };
             _context.MarketDataImports.Add(dateMismatchImport);
             await _context.SaveChangesAsync(cancellationToken);
             return dateMismatchImport;
+        }
+
+        if (parseResult.IsSchemaMismatch)
+        {
+            _logger.LogError("Bulletin schema mismatch for target date {TargetDate}: {Errors}",
+                sessionDate.Value, string.Join("; ", parseResult.Errors));
+
+            var schemaMismatchImport = new MarketDataImport
+            {
+                Provider = Capabilities.ProviderName,
+                SessionDate = sessionDate.Value,
+                SourceFileName = fileName,
+                SourceUrl = sourceUrl,
+                Sha256 = sha256,
+                ContentLength = rawBytes.Length,
+                Status = MarketDataImportStatus.SchemaMismatch,
+                DownloadStatus = BulletinDownloadStatus.SchemaMismatch,
+                ErrorMessage = string.Join("; ", parseResult.Errors)
+            };
+            _context.MarketDataImports.Add(schemaMismatchImport);
+            await _context.SaveChangesAsync(cancellationToken);
+            return schemaMismatchImport;
         }
 
         if (parseResult.AcceptedRows == 0 && parseResult.Errors.Count > 0)
@@ -908,33 +1038,115 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         return import;
     }
 
-    private static MemoryStream? ExtractCsvFromZip(byte[] zipBytes)
+    private static MemoryStream? ExtractCsvFromZip(byte[] zipBytes, DateOnly? expectedDate, out string? errorMessage)
     {
-        using var zipStream = new MemoryStream(zipBytes);
-        using var archive = new ZipArchive(zipStream, ZipArchiveMode.Read);
-
-        if (archive.Entries.Count > 20)
+        errorMessage = null;
+        try
         {
-            return null;
-        }
+            using var zipStream = new MemoryStream(zipBytes);
+            using var archive = new ZipArchive(zipStream, ZipArchiveMode.Read);
 
-        foreach (var entry in archive.Entries)
-        {
-            if (entry.Length > 50 * 1024 * 1024)
+            if (archive.Entries.Count == 0)
             {
+                errorMessage = "ZIP archive is empty.";
                 return null;
             }
 
-            if (entry.FullName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+            if (archive.Entries.Count > 10)
             {
-                var ms = new MemoryStream();
-                using var entryStream = entry.Open();
-                entryStream.CopyTo(ms);
-                ms.Position = 0;
-                return ms;
+                errorMessage = $"ZIP archive contains too many entries ({archive.Entries.Count}). Expected single bulletin CSV.";
+                return null;
             }
-        }
 
-        return null;
+            long totalUncompressedSize = 0;
+            int csvCount = 0;
+            ZipArchiveEntry? candidateCsvEntry = null;
+
+            foreach (var entry in archive.Entries)
+            {
+                // Path traversal check
+                if (entry.FullName.Contains("..") || Path.IsPathRooted(entry.FullName))
+                {
+                    errorMessage = $"Potential path traversal detected in ZIP entry: '{entry.FullName}'.";
+                    return null;
+                }
+
+                // Reject nested archives
+                if (entry.FullName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
+                    entry.FullName.EndsWith(".tar", StringComparison.OrdinalIgnoreCase) ||
+                    entry.FullName.EndsWith(".gz", StringComparison.OrdinalIgnoreCase))
+                {
+                    errorMessage = $"Nested archive detected in ZIP entry: '{entry.FullName}'.";
+                    return null;
+                }
+
+                // Uncompressed size limit per entry (50 MB)
+                if (entry.Length > 50 * 1024 * 1024)
+                {
+                    errorMessage = $"ZIP entry '{entry.FullName}' exceeds maximum allowed size (50 MB).";
+                    return null;
+                }
+
+                totalUncompressedSize += entry.Length;
+
+                if (entry.FullName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+                {
+                    csvCount++;
+                    candidateCsvEntry = entry;
+                }
+            }
+
+            // Total uncompressed size limit (100 MB)
+            if (totalUncompressedSize > 100 * 1024 * 1024)
+            {
+                errorMessage = $"Total uncompressed size of ZIP archive exceeds maximum allowed (100 MB).";
+                return null;
+            }
+
+            // Compression ratio limit (max 100x expansion)
+            if (zipBytes.Length > 0 && totalUncompressedSize > (long)zipBytes.Length * 100)
+            {
+                errorMessage = "Suspicious compression ratio detected (potential zip bomb).";
+                return null;
+            }
+
+            if (csvCount == 0 || candidateCsvEntry == null)
+            {
+                errorMessage = "ZIP archive does not contain a CSV bulletin file.";
+                return null;
+            }
+
+            if (csvCount > 1)
+            {
+                errorMessage = $"Multiple ambiguous CSV files found in ZIP archive ({csvCount}). Expected single bulletin CSV.";
+                return null;
+            }
+
+            // Validate entry filename and date pattern
+            var entryName = Path.GetFileName(candidateCsvEntry.FullName);
+            if (expectedDate.HasValue)
+            {
+                var expectedDateStr = expectedDate.Value.ToString("yyyyMMdd");
+                bool matchesExpectedDate = entryName.Contains(expectedDateStr, StringComparison.OrdinalIgnoreCase);
+                if (!matchesExpectedDate)
+                {
+                    errorMessage = $"ZIP entry filename '{entryName}' does not match requested session date {expectedDate.Value:yyyy-MM-dd}.";
+                    return null;
+                }
+            }
+
+            var ms = new MemoryStream();
+            using (var entryStream = candidateCsvEntry.Open())
+            {
+                entryStream.CopyTo(ms);
+            }
+            ms.Position = 0;
+            return ms;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"ZIP decompression error: {ex.Message}";
+            return null;
+        }
     }
 }

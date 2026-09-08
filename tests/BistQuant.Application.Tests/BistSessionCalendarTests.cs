@@ -222,4 +222,54 @@ public class BistSessionCalendarTests
         var prevTrading = calendar.GetPreviousTradingDay(new DateOnly(2026, 6, 1));
         Assert.Equal(halfDay, prevTrading);
     }
+
+    [Fact]
+    public void Timezone_BistSessionOpen_1000Istanbul_Equals_0700Utc()
+    {
+        var holidays = new ConfigurableHolidayCalendar();
+        var calendar = new BistMarketSessionCalendar(null, holidays);
+
+        var sessionDate = new DateOnly(2026, 9, 8);
+        var openUtc = calendar.GetSessionOpenUtc(sessionDate);
+
+        Assert.Equal(DateTimeKind.Utc, openUtc.Kind);
+        Assert.Equal(new DateTime(2026, 9, 8, 7, 0, 0, DateTimeKind.Utc), openUtc);
+    }
+
+    [Fact]
+    public void Timezone_HalfDaySessionCloseAndCutoff_AccuratelyConvertsToUtc()
+    {
+        var holidays = new ConfigurableHolidayCalendar();
+        var calendar = new BistMarketSessionCalendar(null, holidays);
+
+        // 2026-10-28 is a half-day session:
+        // Open: 10:00 Istanbul -> 07:00 UTC
+        // Close: 13:00 Istanbul -> 10:00 UTC
+        // Publication Window: 13:25 Istanbul -> 10:25 UTC
+        // Publication Cutoff: 16:00 Istanbul -> 13:00 UTC
+        var halfDay = new DateOnly(2026, 10, 28);
+        var openUtc = calendar.GetSessionOpenUtc(halfDay);
+        var closeUtc = calendar.GetSessionCloseUtc(halfDay);
+        var pubUtc = calendar.GetBulletinPublicationTimeUtc(halfDay);
+        var cutoffUtc = calendar.GetBulletinCutoffTimeUtc(halfDay);
+
+        Assert.Equal(new DateTime(2026, 10, 28, 7, 0, 0, DateTimeKind.Utc), openUtc);
+        Assert.Equal(new DateTime(2026, 10, 28, 10, 0, 0, DateTimeKind.Utc), closeUtc);
+        Assert.Equal(new DateTime(2026, 10, 28, 10, 25, 0, DateTimeKind.Utc), pubUtc);
+        Assert.Equal(new DateTime(2026, 10, 28, 13, 0, 0, DateTimeKind.Utc), cutoffUtc);
+    }
+
+    [Fact]
+    public void Timezone_FullDayPublicationCutoff_AccuratelyConvertsToUtc()
+    {
+        var holidays = new ConfigurableHolidayCalendar();
+        var calendar = new BistMarketSessionCalendar(null, holidays);
+
+        // 2026-09-08 regular day:
+        // Cutoff: 21:00 Istanbul -> 18:00 UTC
+        var sessionDate = new DateOnly(2026, 9, 8);
+        var cutoffUtc = calendar.GetBulletinCutoffTimeUtc(sessionDate);
+
+        Assert.Equal(new DateTime(2026, 9, 8, 18, 0, 0, DateTimeKind.Utc), cutoffUtc);
+    }
 }

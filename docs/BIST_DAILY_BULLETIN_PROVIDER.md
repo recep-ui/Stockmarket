@@ -49,29 +49,50 @@ Sağlayıcı yetenekleri (`MarketDataProviderCapabilities`):
 
 ## 2. Resmi CSV Formatı (v1.14 Spesifikasyonu)
 
-Borsa İstanbul bülten dosyaları `BUL_<YYYYMMDD>.csv` adlandırmasıyla, noktalı virgül (`;`) ile ayrılmış ve UTF-8 (BOM içerebilen) biçiminde yayımlanır:
+Borsa İstanbul bülten dosyaları `thb<YYYYMMDD>1.zip` içerisinde `thb<YYYYMMDD>1.csv` adlandırmasıyla, noktalı virgül (`;`) ile ayrılmış ve UTF-8 biçiminde yayımlanır.
 
-### Başlıca Kolonlar
-1. **BÜLTEN TARİHİ (BULLETIN DATE):** `DD/MM/YYYY` (örn. `08/09/2026`)
-2. **ENSTRÜMAN KODU (INSTRUMENT CODE):** Hisse ve pazar eki içeren kod (örn. `THYAO.E`, `GARAN.E`, `AKBNK.E`)
-3. **ENSTRÜMAN GRUBU (INSTRUMENT GROUP):** `EQT` (Pay / Hisse Senedi), `WNT` (Varant), `ETF` (Borsa Yatırım Fonu) vb.
-4. **İŞLEM GÖRDÜĞÜ PAZAR / PAZAR KODU (MARKET CODE):** `ZP` (Yıldız Pazar), `AP` (Ana Pazar), `ALT` (Alt Pazar) vb.
-5. **ÖNCEKİ SEANS KAPANIS FİYATI (PREVIOUS CLOSE):** Sayısal değer (Türkçe virgül veya nokta biçimi)
-6. **AÇILIŞ FİYATI (OPENING PRICE):** Günün ilk işlem fiyatı
-7. **EN DÜŞÜK FİYAT (LOW PRICE):** Gün içinde görülen en düşük fiyat
-8. **EN YÜKSEK FİYAT (HIGH PRICE):** Gün içinde görülen en yüksek fiyat
-9. **KAPANIŞ FİYATI (CLOSING PRICE):** Resmi seans kapanış fiyatı
-10. **AĞIRLIKLI ORTALAMA FİYAT (WEIGHTED AVERAGE PRICE):** Hacim ağırlıklı ortalama fiyat (AOF)
-11. **İŞLEM HACMİ (TOTAL VOLUME):** Gerçekleşen toplam lot adedi
-12. **İŞLEM TUTARI (TOTAL VALUE):** Gerçekleşen toplam TL işlem büyüklüğü
-13. **İŞLEM ADEDİ (NUMBER OF TRADES):** Gerçekleşen işlem/sözleşme sayısı
+### Standart 0-Tabanlı Kolon Yapısı (v1.14 Düzeni)
+0. **TARIH / DATE:** `YYYY-MM-DD` (örn. `2026-09-08`)
+1. **ISLEM KODU / INSTRUMENT SERIES CODE:** Hisse serisi (örn. `THYAO.E`, `GARAN.E`, `ASELS.E`)
+2. **BULTEN ADI / INSTRUMENT NAME:** Şirket unvanı
+3. **PAZAR ALT SEGMENTI / MARKET SUB-SEGMENT**
+4. **PAZAR / MARKET SEGMENT**
+5. **PIYASA / MARKET**
+6. **ENSTRUMAN GRUBU / INSTRUMENT GROUP:** `EQT` (Hisse), `WNT` (Varant), `ETF` (BYF) vb.
+7. **ENSTRUMAN TIPI / INSTRUMENT TYPE**
+8. **ENSTRUMAN SINIFI / INSTRUMENT CLASS**
+9. **ISLEM YONTEMI / TRADING METHOD**
+10. **PIYASA YAPICI / MARKET MAKER**
+11. **BIST 100:** `1` veya `0`
+12. **BIST 30:** `1` veya `0`
+13. **BRUT TAKAS / GROSS SETTLEMENT**
+14. **OZSERMAYE HALLERI / CORPORATE ACTION:** Bedelli/bedelsiz/temettü işlem kodu (örn. `BDL`, `BDS`, `TEM`)
+15. **DURDURMA / SUSPENDED:** `1` (Askıda) veya `0`
+16. **ONCEKI KAPANIS FIYATI / PREVIOUS LAST PRICE**
+17. **ACILIS FIYATI / OPENING PRICE:** Günün ilk işlem fiyatı
+18. **ACILIS SEANSI FIYATI / OPENING SESSION PRICE**
+19. **GUNORTASI FIYATI / MIDDAY PRICE:** Gün ortası tek fiyat seansı fiyatı
+20. **EN DUSUK FIYAT / LOWEST PRICE:** Gün içi en düşük fiyat
+21. **EN YUKSEK FIYAT / HIGHEST PRICE:** Gün içi en yüksek fiyat
+22. **KAPANIS FIYATI / CLOSING PRICE:** Resmi seans kapanış fiyatı
+23. **KAPANIS SEANSI FIYATI / CLOSING SESSION PRICE**
+24. **FIYAT DEGISIMI (%) / CHANGE PERCENT**
+25. **KALAN ALIS / REMAINING BID**
+26. **KALAN SATIS / REMAINING ASK**
+27. **A.O.F / VWAP:** Ağırlıklı ortalama fiyat
+28. **TOPLAM ISLEM HACMI / TOTAL TRADED VALUE:** Toplam işlem tutarı (TL)
+29. **TOPLAM ISLEM ADEDI / TOTAL TRADED VOLUME:** Toplam işlem adedi/hacmi (Lot/Pay) - *Hacim için zorunlu alan*
+30. **SOZLESME SAYISI / TOTAL NUMBER OF CONTRACTS**
+31. **REFERANS FIYAT / REFERENCE PRICE**
 
-### Ayrıştırma Kuralları (`BistDailyBulletinParser`)
-* **Hisse Doğrulaması:** Yalnızca `INSTRUMENT GROUP == "EQT"` olan enstrümanlar hisse senedi olarak kabul edilir. Varant, sertifika veya fonlar filtrelenir.
+### Ayrıştırma ve Doğrulama Kuralları (`BistDailyBulletinParser`)
+* **Resmi Başlık Zorunluluğu (`RequireRecognizedHeader = true`):** Otomatik indirme modunda resmi BIST başlık satırı zorunludur. Başlıksız dosyalarda kolon sırası tahmin edilmez; `SchemaMismatch` hatası ile işlem reddedilir (Fail-Closed).
+* **Hisse Doğrulaması:** Yalnızca `INSTRUMENT GROUP == "EQT"` olan enstrümanlar hisse senedi olarak kabul edilir. Varant, sertifika veya borçlanma araçları filtrelenir.
 * **Sembol Temizleme:** `.E` uzantısı yalnızca `EQT` teyidinden sonra güvenle kaldırılır (`THYAO.E` -> `THYAO`).
-* **Sayısal Dönüşüm:** Türkçe ondalık virgül (`,`) InvariantCulture noktaya (`.`) dönüştürülür.
-* **OHLC Tutarlılığı:** `High >= Low`, `High >= Open`, `High >= Close`, `Low <= Open`, `Low <= Close` ve `Volume >= 0` kuralları doğrulanır.
-* **İşlem Görmeyen / Askıdaki Hisseler:** Eğer hisse seans boyunca askıda kalmışsa veya hiç işlem görmemişse yapay OHLC üretilmez; sadece `DailyInstrumentMarketStats` tablosunda askı/işlemsiz durumu olarak kaydedilir.
+* **Sayısal Dönüşüm:** InvariantCulture (nokta ondalık, virgül binlik) önceliklidir (`1,234.56` -> `1234.56`, `5,000,000` -> `5000000`). Tek virgüllü Türkçe ondalıklar (`100,50` -> `100.50`) `5,000` gibi 3 basamaklı binlik sayılarla karıştırılmayacak biçimde izole ayrıştırılır.
+* **Hacim Zorunluluğu:** `TotalTradedVolume` (Lot adedi) kesinlikle zorunludur (`HasValue && Value >= 0`). `TotalTradedValue` (TL tutarı) hacim yerine kullanılamaz. Eksik veya ayrıştırılamayan hacim `0` olarak kabul edilmez; satır geçersiz kılınır (`HasValidOhlc = false`).
+* **OHLC Tutarlılığı:** `High >= Low`, `High >= Open`, `High >= Close`, `Low <= Open`, `Low <= Close` kuralları doğrulanır.
+* **İşlem Görmeyen / Askıdaki Hisseler:** Eğer hisse seans boyunca askıda kalmışsa (`Suspended == true`) veya geçerli açılış/kapanış fiyatı yoksa yapay OHLC üretilmez; `DailyInstrumentMarketStats` tablosuna askı durumu kaydedilir.
 
 ---
 
@@ -113,10 +134,24 @@ Normal seans günlerinde bülten yayım saati **18:25**, yarım günlerde **13:2
 
 Günlük bülten verisiyle çalışan bir algoritmik tarayıcıda en kritik kural **Lookahead Bias (Gelecek Bilgisi Sızıntısı)** oluşmamasıdır:
 
-1. **Sinyal Üretimi (T Günü Kapanışı):** Bülten saat 18:25'te sisteme girildiğinde T gününün OHLC barları veritabanına yazılır ve tarama çalışır. Üretilen sinyaller T seansı tarihine (`SourceSessionDate = T`) etiketlenir.
-2. **Emir Kuyruğu (`PendingNextSessionOpen`):** T günü kapanışında üretilen alım/satım sinyalleri derhal T gününün kapanış fiyatından işlem YAPMAZ. Bunun yerine bir sonraki iş günü olan T+1 seansının açılışında gerçekleşmek üzere `OrderStatus.PendingNextSessionOpen` durumunda kuyruğa alınır.
-3. **Emir İcrası (T+1 Günü Açılışı):** Bir sonraki seans (T+1) bülteni sisteme geldiğinde, bültenin resmi `OPENING PRICE` fiyatı okunur ve bekleyen emirler bu fiyattan doldurulur (`OrderStatus.Filled`).
-4. **Pozisyon Kapanışı:** Stop-loss veya take-profit sinyalleri de benzer şekilde bir sonraki günün açılışında icra edilir.
+1. **Sinyal Üretimi (T Günü Kapanışı):** Bülten yayım penceresinde (tam günlerde 18:25 TRT, yarım günlerde 13:25 TRT) sisteme girildiğinde T gününün OHLC barları veritabanına yazılır ve tarama çalışır. Üretilen sinyaller T seansı tarihine (`SourceSessionDate = T`) etiketlenir.
+2. **Emir Kuyruğu (`PendingNextSessionOpen`):** T günü kapanışında üretilen alım/satım sinyalleri derhal T gününün kapanış fiyatından işlem YAPMAZ. Bunun yerine bir sonraki iş günü olan T+1 seansının açılışı için `OrderStatus.PendingNextSessionOpen` durumunda kuyruğa alınır.
+3. **Emir İcrası ve UTC Zaman Damgası Dönüşümü:** Bir sonraki seans (T+1) bülteni sisteme geldiğinde, bültenin resmi `OPENING PRICE` fiyatı okunur ve bekleyen emirler bu fiyattan doldurulur (`OrderStatus.Filled`).
+   * **Zaman Damgası Semantiği:** `PriceBar.Timestamp` normalleştirilmiş seans-tarih anahtarıdır (`SessionDate 00:00 UTC`).
+   * **Fiziksel İcra Zamanı:** `PaperOrder.FilledAt` ve `PaperTrade.ExecutedAt` alanları yerel BIST saati olan 10:00 Europe/Istanbul vaktini `IMarketSessionCalendar.GetSessionOpenUtc(sessionDate)` üzerinden tam UTC karşılığı olan **07:00 UTC** değerine dönüştürerek kaydeder.
+4. **Pozisyon Kapanışı ve İptal/Zaman Aşımı:** Askıda olan veya açılış fiyatı bulunmayan enstrümanlar için emirler T+2 gününe taşınmaz; `OrderStatus.Expired` durumuna çekilerek iptal gerekçesi kaydedilir.
+
+---
+
+## 5.1. Yayın Kesilme Zamanı (Publication Cutoff) ve Retry-After Yönetimi
+
+* **Yayın Kesilme Zamanı:** Tam günlerde **21:00 TRT (18:00 UTC)**, yarım günlerde **16:00 TRT (13:00 UTC)** sonrasında otomatik HTTP denemeleri durdurulur (`NextAttemptAt = null`). Gece boyu gereksiz BIST sorgulaması yapılmaz.
+* **HTTP 429 & Retry-After:** Borsa İstanbul sunucusundan 429 yanıtı alındığında yanıttaki `Retry-After` başlığı (saniye veya HTTP tarihi cinsinden) ayrıştırılır ve bir sonraki deneme zamanı buna göre planlanır. Başlık bulunmuyorsa 15 dakikalık varsayılan bekleme süresi uygulanır.
+* **Duruma Duyarlı Geri Çekilme (Status-Aware Backoff):**
+  * 404 (Bülten henüz hazır değil): 10 dakika
+  * 429 (Hız sınırı): Retry-After veya 15 dakika
+  * 5xx / Ağ hatası: Üstel bekleme (1d -> 2d -> 5d -> 10d -> 20d -> 30d tavan)
+  * SchemaMismatch / DateMismatch: Otomatik deneme yapılmaz (admin incelemesi gerekir)
 
 ---
 

@@ -5,7 +5,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-16.3-black.svg)](https://nextjs.org/)
 [![React](https://img.shields.io/badge/React-19.0-blue.svg)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-cyan.svg)](https://tailwindcss.com/)
-[![Tests](https://img.shields.io/badge/Tests-118%20Passed-brightgreen.svg)](https://github.com/recep-ui/Stockmarket)
+[![Tests](https://img.shields.io/badge/Tests-147%20Passed-brightgreen.svg)](https://github.com/recep-ui/Stockmarket)
 
 > **Borsa İstanbul (BIST) Pay Piyasası için geliştirilmiş kurumsal düzeyde sıfır maliyetli (zero-cost) algoritmik tarama, kantitatif puanlama, sinyal üretimi, geriye dönük test (backtesting) ve T+1 ileriye dönük simülasyon (forward-testing paper trading) platformu.**
 
@@ -123,18 +123,22 @@ Yetkili yöneticiler (`Admin` rolü ve Bearer JWT token ile) piyasa verisi bült
 
 ## 5. Test ve Kalite Güvencesi
 
-Proje bünyesinde 118 adet otomatik birim ve entegrasyon testi bulunmaktadır:
+Proje bünyesinde 147 adet deterministik CI-uyumlu otomatik test ve 1 adet resmi duman testi (`OfficialSmokeTest`) bulunmaktadır:
 
 ```bash
-# Test paketini çalıştırın
-dotnet test BistQuant.slnx -c Release
+# Deterministik CI test paketini çalıştırın
+dotnet test BistQuant.slnx -c Release --filter "Category!=OfficialSmokeTest"
+
+# İsteğe bağlı resmi bülten duman testini çalıştırın (resmi ZIP gerektirir)
+dotnet test BistQuant.slnx -c Release --filter "Category=OfficialSmokeTest"
 ```
 
 ```text
 Passed!  - Failed: 0, Passed:  3, Skipped: 0, Total:  3 - BistQuant.Domain.Tests.dll
-Passed!  - Failed: 0, Passed: 67, Skipped: 0, Total: 67 - BistQuant.Application.Tests.dll
-Passed!  - Failed: 0, Passed: 48, Skipped: 0, Total: 48 - BistQuant.IntegrationTests.dll
-Toplam:  118/118 Test Başarılı (%100 Pass)
+Passed!  - Failed: 0, Passed: 82, Skipped: 0, Total: 82 - BistQuant.Application.Tests.dll
+Passed!  - Failed: 0, Passed: 62, Skipped: 0, Total: 62 - BistQuant.IntegrationTests.dll
+Toplam Deterministik CI: 147/147 Test Başarılı (%100 Pass)
+Resmi Duman Testi: PASS (Örnek bülten mevcut olduğunda) / SKIPPED (Mevcut olmadığında)
 ```
 
 Frontend arayüz lint ve build kontrolleri:

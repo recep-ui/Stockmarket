@@ -39,7 +39,6 @@ public static class DependencyInjection
             }
 
             options.ReplaceService<Microsoft.EntityFrameworkCore.Migrations.IMigrationsAssembly, ProviderSpecificMigrationsAssembly>();
-            options.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
         });
 
         services.AddScoped<IApplicationDbContext>(p => p.GetRequiredService<BistQuantDbContext>());
