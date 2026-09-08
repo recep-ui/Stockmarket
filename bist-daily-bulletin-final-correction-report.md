@@ -153,18 +153,17 @@ Tested against official Borsa İstanbul Daily Bulletin archive file:
 
 ```text
 ================================================================================
-GITHUB ACTIONS: ACTIVE
+GITHUB ACTIONS: ACTIVE (100% SUCCESS)
 ================================================================================
 ```
 
 ### Verified Workflow Run
 * **Workflow Location**: `.github/workflows/ci.yml` (on GitHub `main`)
-* **Active Run ID**: `34243046717`
-* **Run URL**: [https://github.com/recep-ui/Stockmarket/actions/runs/34243046717](https://github.com/recep-ui/Stockmarket/actions/runs/34243046717)
-* **Status**: Triggered and running on GitHub Actions.
-* **Pipeline Jobs**:
-  1. `backend`: .NET 10 SDK setup, restore, build, and `dotnet test BistQuant.slnx -c Release --no-build --filter "Category!=OfficialSmokeTest"`
-  2. `ef-integrity`: `dotnet ef migrations has-pending-model-changes` across SQLite and SQL Server providers
-  3. `frontend`: Node 22, `npm ci`, `npm run lint`, `npm run build`
-  4. `security`: Full repository checkout, Gitleaks secret detection, and package vulnerability audit
-
+* **Verified Run ID**: `34243389934`
+* **Run URL**: [https://github.com/recep-ui/Stockmarket/actions/runs/34243389934](https://github.com/recep-ui/Stockmarket/actions/runs/34243389934)
+* **Status**: `completed` / `success` (100% Passed)
+* **Pipeline Jobs (All Passed)**:
+  1. `Frontend Lint & Build (Next.js 16)`: **SUCCESS** (Job 102119042164)
+  2. `EF Core Migration Integrity`: **SUCCESS** (Job 102119042525)
+  3. `Backend Build & Test (.NET 10)`: **SUCCESS** (Job 102119042527 - 147/147 tests passed)
+  4. `Secret & Vulnerability Scanning`: **SUCCESS** (Job 102119043238)

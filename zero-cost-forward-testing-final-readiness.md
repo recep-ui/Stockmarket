@@ -12,7 +12,7 @@
 | Area | Status | Evidence | Remaining Issue |
 | :--- | :---: | :--- | :--- |
 | **EF Model Snapshot** | **PASS** | Synchronized both `Migrations/Sqlite/BistQuantDbContextModelSnapshot.cs` and `Migrations/SqlServer/BistQuantDbContextModelSnapshot.cs`. Verified to contain `BulletinFetchAttempt`, `IndicatorContinuityWarning`, all `PaperOrder` properties, `MarketDataImport` revision fields, unique Signal indexes, and `LastSeenInBulletinDate`. | None |
-| **Pending Model Changes** | **PASS** | Removed `options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning))` from `DependencyInjection.cs`. Both `dotnet ef migrations has-pending-model-changes` (SQLite) and `EF_PROVIDER=sqlserver dotnet ef migrations has-pending-model-changes` (SQL Server) return exit code 0 ("No changes have been made to the model since the last migration"). Verified in automated test `MigrationModelConsistencyTests.cs`. | None |
+| **Pending Model Changes** | **PASS** | Removed `options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning))` from `DependencyInjection.cs`. Both `dotnet ef migrations has-pending-model-changes` (SQLite) and `EF_PROVIDER=sqlserver dotnet ef migrations has-pending-model-changes` (SQL Server) return exit code 0 ("No changes have been made to the model since the last migration"). Verified in automated test `MigrationModelConsistencyTests.cs` and live GitHub Actions `ef-integrity` job. | None |
 | **BulletinFetchAttempt Mapping** | **PASS** | Removed duplicate alias properties (`AttemptedAt`, `HttpStatus`). Canonical persistent properties defined: `AttemptedAtUtc`, `NextAttemptAtUtc`, `HttpStatusCode`. Index defined on `(SessionDate, AttemptedAtUtc)`. | None |
 | **Official Header Validation** | **PASS** | Mandatory header validation enforced in automatic download mode (`RequireRecognizedHeader = true`). Headerless positional guessing is rejected; missing or invalid headers result in `MarketDataImportStatus.SchemaMismatch` (Fail-Closed). | None |
 | **v1.14 Mapping** | **PASS** | 0-based column indices corrected per official BIST specification v1.14: Date=0, Series=1, Open=17, OpeningSessionPrice=18, MiddayPrice=19, Low=20, High=21, Close=22, ClosingSessionPrice=23, ChangePercent=24, Vwap=27, TotalTradedValue=28, TotalTradedVolume=29, TotalContracts=30, ReferencePrice=31. Defined in `BistBulletinSchemaV114.cs` and metadata `BistBulletinSchemaDefinition.cs`. | None |
@@ -28,13 +28,13 @@
 | **Corporate Actions** | **PASS** | Corporate action codes (`BDL`, `BED`, `TEM`) preserved in raw form; raw prices remain unadjusted as source of truth; continuity warnings recorded to `IndicatorContinuityWarnings`. | None |
 | **T+1 Target Session** | **PASS** | Signals generated at Day T EOD schedule orders with `TargetExecutionSessionDate = T+1` via `IMarketSessionCalendar.GetNextTradingDay(T)`. Orders fill strictly at official T+1 Open. If a stock is suspended or has no open price on T+1, order expires (`OrderStatus.Expired`) without drifting into T+2. | None |
 | **T+1 UTC Timestamp** | **PASS** | Market open time (10:00 Europe/Istanbul) is converted to physical execution timestamp **07:00 UTC** via `IMarketSessionCalendar.GetSessionOpenUtc(sessionDate)`. Stored in `PaperOrder.FilledAt` and `PaperTrade.ExecutedAt`. Daily `PriceBar.Timestamp` preserved as normalized `SessionDate 00:00:00 UTC` identity key. | None |
-| **CI-compatible Tests** | **PASS** | **147 / 147 passed** (`dotnet test BistQuant.slnx -c Release --filter "Category!=OfficialSmokeTest"`). Completely free of machine-specific absolute paths (`/home/test`, `Desktop`, `Finance`). Uses repository-contained synthetic fixture (`tests/Fixtures/BistBulletin/synthetic_thb202609071.zip`). | None |
+| **CI-compatible Tests** | **PASS** | **147 / 147 passed** (`dotnet test BistQuant.slnx -c Release --filter "Category!=OfficialSmokeTest"`). Completely free of machine-specific absolute paths (`/home/test`, `Desktop`, `Finance`). Uses repository-contained synthetic fixture (`tests/Fixtures/BistBulletin/synthetic_thb202609071.zip`). Verified green in GitHub Actions. | None |
 | **Official Smoke Test** | **PASS** | Isolated with `[Trait("Category", "OfficialSmokeTest")]`. Configurable via `BIST_OFFICIAL_BULLETIN_SAMPLE_PATH` or repository scratch file. Verified against official archive `scratch/thb202609071.zip` (ASELS and THYAO OHLCV verified). Skipped gracefully without failing CI when sample file is absent. | None |
 | **SQL Server Migration** | **PASS** | Migration `20260908160001_BistBulletinFinalHardening` created. SQL Server design-time model matches snapshot with 0 differences. | None |
 | **SQLite Migration** | **PASS** | Migration `20260908160000_BistBulletinFinalHardening` created. SQLite design-time model matches snapshot with 0 differences. | None |
-| **Frontend** | **PASS** | `npm run lint` passes with 0 errors. `npm run build` compiles 13/13 static and dynamic routes in 12.9s. EOD-only labels and badge displays verified. | None |
+| **Frontend** | **PASS** | `npm run lint` passes with 0 errors. `npm run build` compiles 13/13 static and dynamic routes in 12.9s. Verified green in GitHub Actions frontend job. | None |
 | **Docker** | **PASS** | Both `docker compose --env-file .env.example config` and `docker compose -f docker-compose.prod.yml --env-file .env.example config` validate with exit code 0. Persistent volume `bist_market_data` mapped to `/app/data/marketdata`. | None |
-| **GitHub Actions** | **ACTIVE** | Workflow `.github/workflows/ci.yml` committed and pushed to `main`. Actual workflow run exists and is executing: Run ID `34243046717` (`https://github.com/recep-ui/Stockmarket/actions/runs/34243046717`). Configured with 4 jobs: Backend (.NET 10), EF Core Migration Integrity, Frontend (Node 22 lint/build), Security. | None |
+| **GitHub Actions** | **ACTIVE** | Live GitHub Actions workflow `.github/workflows/ci.yml` executed and **100% SUCCESS** on GitHub main! Verified Run ID: `34243389934` ([Run Link](https://github.com/recep-ui/Stockmarket/actions/runs/34243389934)). All 4 jobs passed: Backend (.NET 10), EF Core Migration Integrity, Frontend (Next.js 16), and Security (Gitleaks). | None |
 
 ---
 
@@ -42,13 +42,14 @@
 
 - **Workflow File:** `.github/workflows/ci.yml`
 - **Trigger:** Push to `main` branch
-- **Active Workflow Run ID:** `34243046717`
-- **Run URL:** `https://github.com/recep-ui/Stockmarket/actions/runs/34243046717`
-- **Jobs Executed:**
-  1. `backend`: .NET 10 restore, build, and `dotnet test BistQuant.slnx -c Release --no-build --filter "Category!=OfficialSmokeTest"`
-  2. `ef-integrity`: `dotnet ef migrations has-pending-model-changes` for SQLite and SQL Server
-  3. `frontend`: Node 22, `npm ci`, `npm run lint`, `npm run build`
-  4. `security`: Gitleaks secret scanning & package vulnerability audit
+- **Verified Workflow Run ID:** `34243389934`
+- **Run URL:** [https://github.com/recep-ui/Stockmarket/actions/runs/34243389934](https://github.com/recep-ui/Stockmarket/actions/runs/34243389934)
+- **Status:** `completed` / `success` (100% Passed)
+- **Jobs Executed & Passed:**
+  1. `Frontend Lint & Build (Next.js 16)`: **SUCCESS** ([Job 102119042164](https://github.com/recep-ui/Stockmarket/actions/runs/34243389934/job/102119042164))
+  2. `EF Core Migration Integrity`: **SUCCESS** ([Job 102119042525](https://github.com/recep-ui/Stockmarket/actions/runs/34243389934/job/102119042525))
+  3. `Backend Build & Test (.NET 10)`: **SUCCESS** ([Job 102119042527](https://github.com/recep-ui/Stockmarket/actions/runs/34243389934/job/102119042527))
+  4. `Secret & Vulnerability Scanning`: **SUCCESS** ([Job 102119043238](https://github.com/recep-ui/Stockmarket/actions/runs/34243389934/job/102119043238))
 
 ---
 
@@ -58,7 +59,7 @@
 ================================================================================
 BIST DAILY BULLETIN DATA PIPELINE:            READY
 ZERO-COST DAILY FORWARD TESTING CODE READINESS: YES
-GITHUB CI ACTIVATION:                         ACTIVE
+GITHUB CI ACTIVATION:                         ACTIVE (100% SUCCESS)
 
 READY FOR ZERO-COST DAILY FORWARD TESTING:    YES
 ================================================================================
