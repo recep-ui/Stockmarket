@@ -1,0 +1,38 @@
+# Build outputs
+**/bin/
+**/obj/
+TestResults/
+[Bb]uild/
+
+# Node & Next.js
+node_modules/
+frontend/node_modules/
+frontend/.next/
+.next/
+frontend/out/
+out/
+.pnpm-store/
+
+# Environment and Secrets
+.env
+.env.*
+!.env.example
+
+# Local SQLite databases & cache
+*.db
+*.db-shm
+*.db-wal
+scratch/
+
+# Application Logs
+Logs/
+**/Logs/
+*.log
+
+# IDE & OS
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db

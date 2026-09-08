@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BistQuant.API/BistQuant.API.csproj" />
+    <Project Path="src/BistQuant.Application/BistQuant.Application.csproj" />
+    <Project Path="src/BistQuant.Domain/BistQuant.Domain.csproj" />
+    <Project Path="src/BistQuant.Infrastructure/BistQuant.Infrastructure.csproj" />
+    <Project Path="src/BistQuant.Worker/BistQuant.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BistQuant.Application.Tests/BistQuant.Application.Tests.csproj" />
+    <Project Path="tests/BistQuant.Domain.Tests/BistQuant.Domain.Tests.csproj" />
+    <Project Path="tests/BistQuant.IntegrationTests/BistQuant.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

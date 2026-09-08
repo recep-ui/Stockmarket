@@ -1,0 +1,113 @@
+# ==============================================================================
+# Production Docker Compose for BIST Quant Scanner
+# Enforces complete internal network isolation:
+# Only Nginx is exposed on ports 80/443. All database, cache, API and frontend
+# services are completely inaccessible from the public host network.
+# ==============================================================================
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: bistquant-mssql-prod
+    restart: always
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?MSSQL_SA_PASSWORD must be set in .env for production}"
+    volumes:
+      - mssql_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q \"SELECT 1\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - bistquant-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: bistquant-redis-prod
+    restart: always
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - bistquant-net
+
+  bistquant-api:
+    build:
+      context: .
+      dockerfile: src/BistQuant.API/Dockerfile
+    container_name: bistquant-api-prod
+    restart: always
+    depends_on:
+      mssql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      DatabaseProvider: SqlServer
+      ConnectionStrings__DefaultConnection: "Server=mssql,1433;Database=BistQuantDb;User Id=sa;Password=${MSSQL_SA_PASSWORD:?MSSQL_SA_PASSWORD must be set in .env};TrustServerCertificate=True;"
+      ConnectionStrings__Redis: "redis:6379"
+      Jwt__Key: "${JWT_KEY:?JWT_KEY must be set in .env (min 32 characters)}"
+      Jwt__Issuer: "${JWT_ISSUER:-BistQuantApi}"
+      Jwt__Audience: "${JWT_AUDIENCE:-BistQuantClient}"
+      Telegram__BotToken: "${TELEGRAM_BOT_TOKEN:-}"
+      Telegram__DefaultChatId: "${TELEGRAM_DEFAULT_CHAT_ID:-}"
+    networks:
+      - bistquant-net
+
+  bistquant-worker:
+    build:
+      context: .
+      dockerfile: src/BistQuant.Worker/Dockerfile
+    container_name: bistquant-worker-prod
+    restart: always
+    depends_on:
+      - bistquant-api
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      DatabaseProvider: SqlServer
+      ConnectionStrings__DefaultConnection: "Server=mssql,1433;Database=BistQuantDb;User Id=sa;Password=${MSSQL_SA_PASSWORD:?MSSQL_SA_PASSWORD must be set in .env};TrustServerCertificate=True;"
+      ConnectionStrings__Redis: "redis:6379"
+    networks:
+      - bistquant-net
+
+  bistquant-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: bistquant-frontend-prod
+    restart: always
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: "/api"
+    networks:
+      - bistquant-net
+
+  nginx:
+    image: nginx:alpine
+    container_name: bistquant-nginx-prod
+    restart: always
+    ports:
+      - "${NGINX_PORT:-80}:80"
+      - "${NGINX_SSL_PORT:-443}:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - bistquant-api
+      - bistquant-frontend
+    networks:
+      - bistquant-net
+
+volumes:
+  mssql_data:
+  redis_data:
+
+networks:
+  bistquant-net:
+    driver: bridge
