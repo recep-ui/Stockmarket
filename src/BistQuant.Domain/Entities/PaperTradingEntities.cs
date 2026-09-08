@@ -68,6 +68,9 @@ public class PaperTrade : BaseEntity<long>
     public int SymbolId { get; set; }
     public Symbol Symbol { get; set; } = null!;
 
+    public long? PaperOrderId { get; set; }
+    public PaperOrder? PaperOrder { get; set; }
+
     public OrderSide Side { get; set; }
     public decimal Quantity { get; set; }
     public decimal Price { get; set; }

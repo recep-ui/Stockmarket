@@ -88,6 +88,58 @@ public class MarketDataFreshnessTests
     }
 
     [Fact]
+    public void CheckFreshness_FutureTimestamp_FailsClosedOutsideAllowedSkew()
+    {
+        var policy = CreatePolicy(); // default allowed skew = 60s
+        var now = new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc);
+
+        // Exact current time -> Fresh
+        var exactCurrent = policy.CheckFreshness(Timeframe.M15, now, now);
+        Assert.True(exactCurrent.IsFresh, "Exact current time must be fresh.");
+
+        // +30 seconds into future -> within 60s allowed skew -> Fresh
+        var withinSkew = policy.CheckFreshness(Timeframe.M15, now.AddSeconds(30), now);
+        Assert.True(withinSkew.IsFresh, "+30s is within 60s allowed skew and must be accepted.");
+
+        // +61 seconds into future -> exceeds 60s allowed skew -> Stale / Fail closed
+        var exceededSkew = policy.CheckFreshness(Timeframe.M15, now.AddSeconds(61), now);
+        Assert.False(exceededSkew.IsFresh, "+61s exceeds 60s allowed skew and must fail closed.");
+        Assert.Contains("clock skew violation", exceededSkew.Details, StringComparison.OrdinalIgnoreCase);
+
+        // +5 minutes into future -> Stale / Fail closed
+        var future5Min = policy.CheckFreshness(Timeframe.M15, now.AddMinutes(5), now);
+        Assert.False(future5Min.IsFresh, "+5m in future must fail closed.");
+        Assert.Contains("clock skew violation", future5Min.Details, StringComparison.OrdinalIgnoreCase);
+
+        // Large negative age error (+2 hours in future) -> Stale / Fail closed
+        var largeFutureError = policy.CheckFreshness(Timeframe.Daily, now.AddHours(2), now);
+        Assert.False(largeFutureError.IsFresh, "Large future timestamp error must fail closed.");
+        Assert.Contains("clock skew violation", largeFutureError.Details, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CheckFreshness_CustomAllowedSkewConfiguration_Enforced()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["FreshnessThresholds:AllowedFutureSkewSeconds"] = "15",
+            ["FreshnessThresholds:M15Minutes"] = "45"
+        };
+        var config = new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+        var customPolicy = new MarketDataFreshnessPolicy(config);
+
+        var now = new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc);
+
+        // +10s <= 15s allowed -> Fresh
+        Assert.True(customPolicy.CheckFreshness(Timeframe.M15, now.AddSeconds(10), now).IsFresh);
+
+        // +20s > 15s allowed -> Fail Closed
+        var res = customPolicy.CheckFreshness(Timeframe.M15, now.AddSeconds(20), now);
+        Assert.False(res.IsFresh);
+        Assert.Contains("clock skew violation", res.Details);
+    }
+
+    [Fact]
     public void IsFresh_PriceBar_EvaluatesAccurately()
     {
         var policy = CreatePolicy();

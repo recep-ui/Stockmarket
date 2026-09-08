@@ -27,8 +27,8 @@ public class StrategyOwnershipTests : IClassFixture<WebApplicationFactory<Progra
         var strategyEngine = scope.ServiceProvider.GetRequiredService<IStrategyEngine>();
 
         // 1. Create two test users
-        var userA = new User { Email = "usera@test.com", DisplayName = "User A", Role = "User" };
-        var userB = new User { Email = "userb@test.com", DisplayName = "User B", Role = "User" };
+        var userA = new User { Email = $"usera_{Guid.NewGuid():N}@test.com", DisplayName = "User A", Role = "User" };
+        var userB = new User { Email = $"userb_{Guid.NewGuid():N}@test.com", DisplayName = "User B", Role = "User" };
         context.Users.AddRange(userA, userB);
         await context.SaveChangesAsync();
 
@@ -75,5 +75,71 @@ public class StrategyOwnershipTests : IClassFixture<WebApplicationFactory<Progra
 
         var stratAfterOwnDelete = await context.Strategies.FindAsync(createdStrategy.Id);
         Assert.Null(stratAfterOwnDelete);
+    }
+
+    [Fact]
+    public async Task StrategyPrivacy_ReadAccessControl_EnforcedCorrectly()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
+        var strategyEngine = scope.ServiceProvider.GetRequiredService<IStrategyEngine>();
+
+        // Create users: Owner, Another User, Admin
+        var owner = new User { Email = $"owner_{Guid.NewGuid():N}@test.com", DisplayName = "Strategy Owner", Role = "User" };
+        var otherUser = new User { Email = $"other_{Guid.NewGuid():N}@test.com", DisplayName = "Other User", Role = "User" };
+        var admin = new User { Email = $"admin_{Guid.NewGuid():N}@test.com", DisplayName = "Admin User", Role = "Admin" };
+        context.Users.AddRange(owner, otherUser, admin);
+        await context.SaveChangesAsync();
+
+        // Create custom strategy for Owner
+        var createRequest = new CreateStrategyRequest(
+            Name: "Confidential Alpha Model",
+            Description: "Proprietary model",
+            StrategyType: "Trend",
+            Timeframe: Timeframe.Daily,
+            Rules: new List<StrategyRuleDto>
+            {
+                new(0, "Close", RuleOperator.GreaterThan, null, null, "EMA20", 30, "Trend", true)
+            }
+        );
+
+        var customStrategy = await strategyEngine.CreateStrategyAsync(createRequest, owner.Id);
+        Assert.NotNull(customStrategy);
+
+        // Seed system strategies
+        await strategyEngine.SeedPredefinedStrategiesAsync();
+        var systemStrategy = await context.Strategies.FirstOrDefaultAsync(s => s.IsSystem);
+        Assert.NotNull(systemStrategy);
+
+        // Test 1: Anonymous user cannot read private custom strategy (returns null -> 404)
+        var anonRead = await strategyEngine.GetStrategyByIdAsync(customStrategy.Id, currentUserId: null, isAdmin: false);
+        Assert.Null(anonRead);
+
+        // Test 2: Other normal user cannot read private custom strategy (returns null -> 404/403)
+        var crossUserRead = await strategyEngine.GetStrategyByIdAsync(customStrategy.Id, currentUserId: otherUser.Id, isAdmin: false);
+        Assert.Null(crossUserRead);
+
+        // Test 3: Owner CAN read own strategy
+        var ownerRead = await strategyEngine.GetStrategyByIdAsync(customStrategy.Id, currentUserId: owner.Id, isAdmin: false);
+        Assert.NotNull(ownerRead);
+        Assert.Equal("Confidential Alpha Model", ownerRead.Name);
+
+        // Test 4: Admin CAN read any custom strategy
+        var adminRead = await strategyEngine.GetStrategyByIdAsync(customStrategy.Id, currentUserId: admin.Id, isAdmin: true);
+        Assert.NotNull(adminRead);
+        Assert.Equal("Confidential Alpha Model", adminRead.Name);
+
+        // Test 5: System strategies are publicly readable by anonymous user
+        var anonSystemRead = await strategyEngine.GetStrategyByIdAsync(systemStrategy.Id, currentUserId: null, isAdmin: false);
+        Assert.NotNull(anonSystemRead);
+        Assert.True(anonSystemRead.IsSystem);
+
+        // Test 6: System strategies are readable by normal user
+        var userSystemRead = await strategyEngine.GetStrategyByIdAsync(systemStrategy.Id, currentUserId: otherUser.Id, isAdmin: false);
+        Assert.NotNull(userSystemRead);
+
+        // Test 7: Admin can delete custom strategy
+        var adminDeleteResult = await strategyEngine.DeleteStrategyAsync(customStrategy.Id, userId: admin.Id, isAdmin: true);
+        Assert.True(adminDeleteResult);
     }
 }

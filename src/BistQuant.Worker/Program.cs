@@ -1,7 +1,8 @@
 using BistQuant.Application;
+using BistQuant.Application.Common.Interfaces;
+using BistQuant.Application.Services.MarketData;
 using BistQuant.Infrastructure;
 using BistQuant.Worker;
-using BistQuant.Worker.Scheduling;
 
 var builder = Host.CreateApplicationBuilder(args);
 

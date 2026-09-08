@@ -3,7 +3,7 @@ using BistQuant.Application.Common.Interfaces;
 using BistQuant.Application.Services;
 using BistQuant.Domain.Entities;
 using BistQuant.Domain.Enums;
-using BistQuant.Worker.Scheduling;
+using Microsoft.EntityFrameworkCore;
 
 namespace BistQuant.Worker;
 
@@ -11,16 +11,19 @@ public class Worker : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly IMarketScanScheduler _scheduler;
+    private readonly IMarketSessionCalendar _sessionCalendar;
     private readonly ILogger<Worker> _logger;
     private readonly ConcurrentDictionary<Timeframe, DateTime> _lastCompletedMap = new();
 
     public Worker(
         IServiceProvider serviceProvider,
         IMarketScanScheduler scheduler,
+        IMarketSessionCalendar sessionCalendar,
         ILogger<Worker> logger)
     {
         _serviceProvider = serviceProvider;
         _scheduler = scheduler;
+        _sessionCalendar = sessionCalendar;
         _logger = logger;
     }
 
@@ -28,10 +31,34 @@ public class Worker : BackgroundService
     {
         _logger.LogInformation("BIST Quant Scanner Background Worker started at: {Time}", DateTimeOffset.Now);
 
-        // Initial scan on startup for enabled timeframes
-        if (_scheduler.IsTimeframeEnabled(Timeframe.Daily))
+        // Pre-populate last completed map from database to prevent duplicate startup runs
+        try
         {
-            await TryRunScanAsync(Timeframe.Daily, stoppingToken);
+            using var scope = _serviceProvider.CreateScope();
+            var context = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
+            var recentHeartbeats = await context.WorkerHeartbeats
+                .AsNoTracking()
+                .Where(w => w.Success && w.CompletedAt.HasValue)
+                .GroupBy(w => w.Timeframe)
+                .Select(g => new { Timeframe = g.Key, LastCompleted = g.Max(w => w.CompletedAt!.Value) })
+                .ToListAsync(stoppingToken);
+
+            foreach (var hb in recentHeartbeats)
+            {
+                _lastCompletedMap[hb.Timeframe] = hb.LastCompleted;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not load prior worker heartbeats during initialization.");
+        }
+
+        // Calendar-aware startup check: run only if a completed candle exists that has not yet been scanned
+        var startupDue = _scheduler.GetDueTimeframes(DateTime.UtcNow, _lastCompletedMap);
+        foreach (var tf in startupDue)
+        {
+            _logger.LogInformation("Startup scan cycle due for timeframe {Timeframe}.", tf);
+            await TryRunScanAsync(tf, stoppingToken);
         }
 
         using var timer = new PeriodicTimer(_scheduler.GetNextCheckInterval());
@@ -62,12 +89,15 @@ public class Worker : BackgroundService
         var context = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
         var scanner = scope.ServiceProvider.GetRequiredService<IMarketScannerService>();
 
+        var expectedCandleClose = _sessionCalendar.GetLastClosedCandleTimeUtc(timeframe, DateTime.UtcNow);
+
         var heartbeat = new WorkerHeartbeat
         {
             WorkerInstance = Environment.MachineName,
             ScanType = "UniverseScan",
             Timeframe = timeframe,
             StartedAt = DateTime.UtcNow,
+            ExpectedCandleClose = expectedCandleClose,
             Success = false
         };
 
@@ -77,13 +107,23 @@ public class Worker : BackgroundService
         try
         {
             var results = await scanner.ScanUniverseAsync(timeframe, null, stoppingToken);
+            
+            // Retrieve latest data bar timestamp to distinguish successful worker execution from stale data scan
+            var latestBar = await context.PriceBars
+                .AsNoTracking()
+                .Where(p => p.Timeframe == timeframe)
+                .OrderByDescending(p => p.Timestamp)
+                .FirstOrDefaultAsync(stoppingToken);
+
             heartbeat.CompletedAt = DateTime.UtcNow;
+            heartbeat.DataTimestamp = latestBar?.Timestamp;
             heartbeat.Success = true;
             heartbeat.SymbolCount = results.Count;
             await context.SaveChangesAsync(stoppingToken);
 
             _lastCompletedMap[timeframe] = heartbeat.CompletedAt.Value;
-            _logger.LogInformation("Background scan for {Timeframe} completed: {Count} symbols evaluated.", timeframe, results.Count);
+            _logger.LogInformation("Background scan for {Timeframe} completed: {Count} symbols evaluated (latest data: {DataTs}).",
+                timeframe, results.Count, latestBar?.Timestamp.ToString("yyyy-MM-dd HH:mm:ss") ?? "None");
         }
         catch (Exception ex)
         {

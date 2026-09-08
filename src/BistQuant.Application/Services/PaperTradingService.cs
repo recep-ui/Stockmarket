@@ -173,12 +173,21 @@ public class PaperTradingService : IPaperTradingService
             {
                 var existingTrade = await _context.PaperTrades
                     .Include(t => t.Symbol)
-                    .OrderByDescending(t => t.ExecutedAt)
-                    .FirstOrDefaultAsync(t => t.PortfolioId == request.PortfolioId && t.SymbolId == existingOrder.SymbolId, cancellationToken);
+                    .FirstOrDefaultAsync(t => t.PaperOrderId == existingOrder.Id, cancellationToken);
+
+                if (existingTrade == null)
+                {
+                    // Fallback for legacy orders created before PaperOrderId was introduced
+                    existingTrade = await _context.PaperTrades
+                        .Include(t => t.Symbol)
+                        .Where(t => t.PortfolioId == request.PortfolioId && t.SymbolId == existingOrder.SymbolId)
+                        .OrderByDescending(t => t.ExecutedAt)
+                        .FirstOrDefaultAsync(cancellationToken);
+                }
 
                 if (existingTrade != null)
                 {
-                    _logger.LogInformation("Idempotent order request '{ClientOrderId}' returned existing trade {TradeId}.", request.ClientOrderId, existingTrade.Id);
+                    _logger.LogInformation("Idempotent order request '{ClientOrderId}' returned exact linked trade {TradeId}.", request.ClientOrderId, existingTrade.Id);
                     return new PaperTradeDto(
                         existingTrade.Id,
                         existingTrade.SymbolId,
@@ -325,6 +334,7 @@ public class PaperTradingService : IPaperTradingService
         {
             PortfolioId = portfolio.Id,
             SymbolId = symbol.Id,
+            PaperOrder = paperOrder,
             Side = request.Side,
             Quantity = request.Quantity,
             Price = executionPrice,

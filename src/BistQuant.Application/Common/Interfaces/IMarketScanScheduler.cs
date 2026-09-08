@@ -1,6 +1,6 @@
 using BistQuant.Domain.Enums;
 
-namespace BistQuant.Worker.Scheduling;
+namespace BistQuant.Application.Common.Interfaces;
 
 public record ScheduledScanJob(
     Timeframe Timeframe,

@@ -19,10 +19,24 @@ public class MarketDataFreshnessPolicy : IMarketDataFreshnessPolicy
         var referenceTime = asOf ?? DateTime.UtcNow;
         var age = referenceTime - barTimestamp;
 
+        var allowedSkewSeconds = _configuration.GetValue<int?>("FreshnessThresholds:AllowedFutureSkewSeconds") ?? 60;
+        var allowedSkew = TimeSpan.FromSeconds(allowedSkewSeconds);
+
+        // Fail-closed future timestamp guard
+        if (barTimestamp > referenceTime + allowedSkew)
+        {
+            return new FreshnessCheckResult(
+                false,
+                age,
+                allowedSkew,
+                $"Future timestamp / clock skew violation: bar timestamp is {(barTimestamp - referenceTime).TotalSeconds:F1}s ahead of reference time (allowed skew: {allowedSkewSeconds}s)."
+            );
+        }
+
         if (age < TimeSpan.Zero)
         {
-            // Bar is in the future relative to reference time (data clock skew)
-            return new FreshnessCheckResult(true, age, TimeSpan.FromMinutes(1), "Bar timestamp is current/future.");
+            // Bar is slightly in the future within allowed clock skew tolerance
+            return new FreshnessCheckResult(true, age, allowedSkew, $"Bar timestamp is within allowed future clock skew ({allowedSkewSeconds}s).");
         }
 
         TimeSpan maxAge;

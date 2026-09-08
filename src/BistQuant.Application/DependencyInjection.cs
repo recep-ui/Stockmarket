@@ -9,6 +9,9 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddApplicationServices(this IServiceCollection services)
     {
+        services.AddSingleton<IHolidayCalendar, ConfigurableHolidayCalendar>();
+        services.AddSingleton<IMarketSessionCalendar, BistMarketSessionCalendar>();
+        services.AddSingleton<IMarketScanScheduler, MarketScanScheduler>();
         services.AddScoped<ISignalClassifier, SignalClassifier>();
         services.AddScoped<IMarketDataFreshnessPolicy, MarketDataFreshnessPolicy>();
         services.AddScoped<ITechnicalAnalysisService, TechnicalAnalysisService>();

@@ -30,7 +30,8 @@ public class StrategiesController : ControllerBase
     public async Task<ActionResult<ApiResponse<StrategyDto>>> GetStrategy(int id, CancellationToken cancellationToken = default)
     {
         long? userId = long.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var parsed) ? parsed : null;
-        var strategy = await _strategyEngine.GetStrategyByIdAsync(id, userId, cancellationToken);
+        bool isAdmin = User.IsInRole("Admin");
+        var strategy = await _strategyEngine.GetStrategyByIdAsync(id, userId, isAdmin, cancellationToken);
         if (strategy == null)
         {
             return NotFound(ApiResponse<StrategyDto>.Fail($"Strategy with ID {id} was not found."));

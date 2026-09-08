@@ -307,3 +307,37 @@ This document tracks every granular development step required to implement the c
   - 88/88 solution tests passing (3 Domain, 51 Application, 34 Integration)
   - Next.js 16 Turbopack production build: 13/13 routes compiled with 0 errors
   - ESLint: 0 errors
+
+---
+
+## Phase 12: Final Correction & Semantic Parity Sprint
+- [x] Scanner & Backtest Decision Parity:
+  - Ensured `SignalEngine` returns `null` when custom strategy evaluates to `!IsSignalTriggered` (0 ghost signals, 0 false alerts, 0 scanner leaks)
+  - Created `ScannerBacktestDecisionParityTests.cs` verifying Scenarios A, B, C, D with exact score breakdown and rule reason parity
+- [x] Market Data Freshness Future Skew Protection:
+  - Fail-closed future timestamp guard in `MarketDataFreshnessPolicy` (default: 60s allowed skew)
+  - Comprehensive unit tests in `MarketDataFreshnessTests.cs` covering future skew, negative age, and custom thresholds
+- [x] Strategy Privacy & Access Control:
+  - Private by default: `GetStrategyByIdAsync` restricted to owner and Admin (404/403 for unauthorized)
+  - Verified via `StrategyOwnershipTests.cs`
+- [x] BIST Market Session Calendar:
+  - Implemented `IMarketSessionCalendar`, `IHolidayCalendar`, `BistMarketSessionCalendar`, `ConfigurableHolidayCalendar` (Europe/Istanbul 10:00-18:00, holidays, daily close 18:15)
+  - Session-aware scheduling in `MarketScanScheduler` and `Worker` (skips non-trading hours, weekends, holidays)
+  - Verified via `BistSessionCalendarTests.cs` and `WorkerSessionAndHealthTests.cs`
+- [x] Multi-Timeframe & Calendar-Aware Health Checks:
+  - Multi-timeframe health evaluation across M15, H1, and Daily
+  - Calendar-aware tolerance (Friday bar remains fresh over the weekend)
+- [x] Paper Trading Exact Order Idempotency:
+  - Added `PaperOrderId` FK to `PaperTrade` linking to `PaperOrder`
+  - EF Core migrations for SQLite and SQL Server (`20260908120000_FinalHardeningUpdates` & `20260908120001_FinalHardeningUpdates`)
+  - Order re-execution returns exact existing trade without duplicate deductions
+- [x] Deliberate Interval Mapping:
+  - Explicit timeframe mapping in `CalculateExpiration` and `GetCooldownForTimeframe`
+- [x] CI & Security Hardening:
+  - Hardened `.github/workflows/ci.yml` and `ci/ci.yml` with strict Gitleaks (`fetch-depth: 0`, `continue-on-error: false`)
+- [x] Comprehensive Solution Verification:
+  - 106/106 solution tests passing (3 Domain, 59 Application, 44 Integration)
+  - Frontend Next.js 16 build passing (0 errors, 13/13 routes)
+  - Zero vulnerable packages, valid docker compose configs
+  - `final-correction-report.md` generated with verdict: `READY FOR LIVE BIST DATA INTEGRATION: YES`
+

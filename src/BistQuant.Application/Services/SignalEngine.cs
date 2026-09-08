@@ -179,18 +179,17 @@ public class SignalEngine : ISignalEngine
 
         // Unified evaluation pipeline shared directly with BacktestEngine
         var evalResult = _pipeline.Evaluate(latestBar, snapshot, history, strategy, prevBar, prevSnapshot);
-        var risk = CalculateRiskParameters(latestBar.Close, snapshot);
 
-        var expiresAt = timeframe switch
+        // Required rule: If custom strategy is supplied and evalResult.IsSignalTriggered == false,
+        // do not persist signal, do not trigger alerts, and do not emit scanner result.
+        if (strategy != null && !evalResult.IsSignalTriggered)
         {
-            Timeframe.M1 => DateTime.UtcNow.AddMinutes(15),
-            Timeframe.M5 => DateTime.UtcNow.AddMinutes(45),
-            Timeframe.M15 => DateTime.UtcNow.AddHours(2),
-            Timeframe.M30 => DateTime.UtcNow.AddHours(4),
-            Timeframe.H1 => DateTime.UtcNow.AddHours(8),
-            Timeframe.H4 => DateTime.UtcNow.AddHours(24),
-            _ => DateTime.UtcNow.AddDays(1)
-        };
+            _logger.LogDebug("Strategy '{StrategyName}' (ID {StrategyId}) did not trigger for symbol {SymbolId}.", strategy.Name, strategy.Id, symbolId);
+            return null;
+        }
+
+        var risk = CalculateRiskParameters(latestBar.Close, snapshot);
+        var expiresAt = CalculateExpiration(timeframe, DateTime.UtcNow);
 
         var signal = new Signal
         {
@@ -254,5 +253,21 @@ public class SignalEngine : ISignalEngine
         }
 
         return signal;
+    }
+
+    public static DateTime CalculateExpiration(Timeframe timeframe, DateTime asOfUtc)
+    {
+        return timeframe switch
+        {
+            Timeframe.M1 => asOfUtc.AddMinutes(15),
+            Timeframe.M5 => asOfUtc.AddMinutes(45),
+            Timeframe.M15 => asOfUtc.AddHours(2),
+            Timeframe.M30 => asOfUtc.AddHours(4),
+            Timeframe.H1 => asOfUtc.AddHours(8),
+            Timeframe.H4 => asOfUtc.AddHours(24),
+            Timeframe.Daily => asOfUtc.AddDays(2),
+            Timeframe.Weekly => asOfUtc.AddDays(7),
+            _ => asOfUtc.AddDays(1)
+        };
     }
 }

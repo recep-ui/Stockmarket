@@ -104,4 +104,59 @@ public class PaperTradingApiTests : IClassFixture<WebApplicationFactory<Program>
         Assert.NotNull(tradesResult?.Data);
         Assert.True(tradesResult.Data.Count >= 2);
     }
+
+    [Fact]
+    public async Task ExecuteOrder_IdempotencyExactOrderMapping_ReturnsCorrectTrade()
+    {
+        var client = await CreateAuthenticatedClientAsync();
+
+        // 1. Get portfolio
+        var portResponse = await client.GetAsync("/api/paper-portfolios");
+        var portResult = await portResponse.Content.ReadFromJsonAsync<ApiResponse<PaperPortfolioDto>>();
+        Assert.NotNull(portResult?.Data);
+        var portfolioId = portResult.Data.Id;
+
+        var clientOrderIdA = $"order_idemp_A_{Guid.NewGuid():N}";
+        var clientOrderIdB = $"order_idemp_B_{Guid.NewGuid():N}";
+
+        // 2. Execute Order A: 10 shares of THYAO
+        var orderA = new CreatePaperOrderRequest(
+            PortfolioId: portfolioId,
+            Symbol: "THYAO",
+            Side: OrderSide.Buy,
+            Type: OrderType.Market,
+            Quantity: 10,
+            ClientOrderId: clientOrderIdA
+        );
+
+        var respA = await client.PostAsJsonAsync("/api/paper-portfolios/orders", orderA);
+        Assert.Equal(HttpStatusCode.OK, respA.StatusCode);
+        var tradeA = (await respA.Content.ReadFromJsonAsync<ApiResponse<PaperTradeDto>>())!.Data!;
+        Assert.Equal(10, tradeA.Quantity);
+
+        // 3. Execute Order B later for same symbol: 25 shares of THYAO
+        var orderB = new CreatePaperOrderRequest(
+            PortfolioId: portfolioId,
+            Symbol: "THYAO",
+            Side: OrderSide.Buy,
+            Type: OrderType.Market,
+            Quantity: 25,
+            ClientOrderId: clientOrderIdB
+        );
+
+        var respB = await client.PostAsJsonAsync("/api/paper-portfolios/orders", orderB);
+        Assert.Equal(HttpStatusCode.OK, respB.StatusCode);
+        var tradeB = (await respB.Content.ReadFromJsonAsync<ApiResponse<PaperTradeDto>>())!.Data!;
+        Assert.Equal(25, tradeB.Quantity);
+        Assert.NotEqual(tradeA.Id, tradeB.Id);
+
+        // 4. Re-submit idempotent Order A -> MUST return Trade A, NOT more recent Trade B!
+        var respAIdempotent = await client.PostAsJsonAsync("/api/paper-portfolios/orders", orderA);
+        Assert.Equal(HttpStatusCode.OK, respAIdempotent.StatusCode);
+        var tradeAReturned = (await respAIdempotent.Content.ReadFromJsonAsync<ApiResponse<PaperTradeDto>>())!.Data!;
+
+        Assert.Equal(tradeA.Id, tradeAReturned.Id);
+        Assert.Equal(10, tradeAReturned.Quantity);
+        Assert.NotEqual(tradeB.Id, tradeAReturned.Id);
+    }
 }

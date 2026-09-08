@@ -10,6 +10,8 @@ public class WorkerHeartbeat : BaseEntity<long>
     public Timeframe Timeframe { get; set; } = Timeframe.Daily;
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;
     public DateTime? CompletedAt { get; set; }
+    public DateTime? ExpectedCandleClose { get; set; }
+    public DateTime? DataTimestamp { get; set; }
     public bool Success { get; set; } = false;
     public int SymbolCount { get; set; } = 0;
     public string? ErrorMessage { get; set; }

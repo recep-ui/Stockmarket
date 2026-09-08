@@ -344,6 +344,13 @@ public class PaperTradeConfiguration : IEntityTypeConfiguration<PaperTrade>
                .WithMany()
                .HasForeignKey(t => t.SymbolId)
                .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(t => t.PaperOrder)
+               .WithMany()
+               .HasForeignKey(t => t.PaperOrderId)
+               .OnDelete(DeleteBehavior.SetNull);
+
+        builder.HasIndex(t => t.PaperOrderId);
     }
 }
 

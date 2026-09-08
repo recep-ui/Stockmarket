@@ -26,7 +26,7 @@ public interface IStrategyEngine
 
     Task<List<StrategyDto>> GetAllStrategiesAsync(long? currentUserId = null, CancellationToken cancellationToken = default);
 
-    Task<StrategyDto?> GetStrategyByIdAsync(int id, long? currentUserId = null, CancellationToken cancellationToken = default);
+    Task<StrategyDto?> GetStrategyByIdAsync(int id, long? currentUserId = null, bool isAdmin = false, CancellationToken cancellationToken = default);
 
     Task<StrategyDto> CreateStrategyAsync(CreateStrategyRequest request, long? userId = null, CancellationToken cancellationToken = default);
 
@@ -295,7 +295,7 @@ public class StrategyEngine : IStrategyEngine
         )).ToList();
     }
 
-    public async Task<StrategyDto?> GetStrategyByIdAsync(int id, long? currentUserId = null, CancellationToken cancellationToken = default)
+    public async Task<StrategyDto?> GetStrategyByIdAsync(int id, long? currentUserId = null, bool isAdmin = false, CancellationToken cancellationToken = default)
     {
         var s = await _context.Strategies
             .AsNoTracking()
@@ -304,10 +304,12 @@ public class StrategyEngine : IStrategyEngine
 
         if (s == null) return null;
 
-        // Custom user strategy: hide if requesting user is neither owner nor admin
-        if (!s.IsSystem && currentUserId.HasValue && s.UserId.HasValue && s.UserId.Value != currentUserId.Value)
+        // Custom user strategy: hide if requesting user is neither owner nor admin.
+        // Anonymous users (currentUserId == null) receive null (404 Not Found).
+        if (!s.IsSystem)
         {
-            return null;
+            if (!currentUserId.HasValue) return null;
+            if (s.UserId != currentUserId.Value && !isAdmin) return null;
         }
 
         return new StrategyDto(

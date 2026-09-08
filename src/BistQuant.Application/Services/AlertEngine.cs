@@ -58,13 +58,8 @@ public class AlertEngine : IAlertEngine
 
         foreach (var sub in activeSubs)
         {
-            // Cooldown check
-            var cooldown = signal.Timeframe switch
-            {
-                Timeframe.M15 => TimeSpan.FromMinutes(15),
-                Timeframe.H1 => TimeSpan.FromHours(1),
-                _ => TimeSpan.FromHours(8) // Daily
-            };
+            // Cooldown check via centralized timeframe mapping
+            var cooldown = GetCooldownForTimeframe(signal.Timeframe);
 
             if (sub.LastTriggeredAt.HasValue && (now - sub.LastTriggeredAt.Value) < cooldown)
             {
@@ -232,4 +227,17 @@ public class AlertEngine : IAlertEngine
             n.CreatedAt
         )).ToList();
     }
+
+    public static TimeSpan GetCooldownForTimeframe(Timeframe timeframe) => timeframe switch
+    {
+        Timeframe.M1 => TimeSpan.FromMinutes(1),
+        Timeframe.M5 => TimeSpan.FromMinutes(5),
+        Timeframe.M15 => TimeSpan.FromMinutes(15),
+        Timeframe.M30 => TimeSpan.FromMinutes(30),
+        Timeframe.H1 => TimeSpan.FromHours(1),
+        Timeframe.H4 => TimeSpan.FromHours(4),
+        Timeframe.Daily => TimeSpan.FromHours(8),
+        Timeframe.Weekly => TimeSpan.FromDays(2),
+        _ => TimeSpan.FromHours(8)
+    };
 }
