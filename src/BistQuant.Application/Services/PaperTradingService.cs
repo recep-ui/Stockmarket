@@ -435,6 +435,9 @@ public class PaperTradingService : IPaperTradingService
 
             try
             {
+                var sigSessionDate = sig.SourceSessionDate ?? (latestBar != null ? DateOnly.FromDateTime(latestBar.Timestamp) : DateOnly.FromDateTime(sig.CreatedAt));
+                var targetExecutionDate = _sessionCalendar?.GetNextTradingDay(sigSessionDate) ?? sigSessionDate.AddDays(1);
+
                 // In T+1 EOD forward testing, market orders are submitted for execution at the NEXT trading session's open.
                 var pendingOrder = new PaperOrder
                 {
@@ -446,14 +449,17 @@ public class PaperTradingService : IPaperTradingService
                     Status = OrderStatus.PendingNextSessionOpen,
                     Quantity = shares,
                     TargetPrice = sig.TakeProfit1,
-                    StopLossPrice = sig.StopLoss
+                    StopLossPrice = sig.StopLoss,
+                    SourceSignalId = sig.Id,
+                    SignalSessionDate = sigSessionDate,
+                    TargetExecutionSessionDate = targetExecutionDate
                 };
 
                 _context.PaperOrders.Add(pendingOrder);
                 await _context.SaveChangesAsync(cancellationToken);
 
-                _logger.LogInformation("Auto Paper Trade queued (PendingNextSessionOpen) for {Ticker} ({Shares} shares, ClientOrderId: {ClientOrderId})",
-                    sig.Symbol.Ticker, shares, clientOrderId);
+                _logger.LogInformation("Auto Paper Trade queued (PendingNextSessionOpen) for {Ticker} ({Shares} shares, SignalSession: {SignalSession}, TargetSession: {TargetSession}, ClientOrderId: {ClientOrderId})",
+                    sig.Symbol.Ticker, shares, sigSessionDate, targetExecutionDate, clientOrderId);
             }
             catch (Exception ex)
             {
@@ -464,11 +470,12 @@ public class PaperTradingService : IPaperTradingService
 
     public async Task<int> ExecutePendingOrdersForSessionAsync(DateOnly sessionDate, CancellationToken cancellationToken = default)
     {
+        // Strictly execute only orders targeted for this specific session date
         var pendingOrders = await _context.PaperOrders
             .Include(o => o.Portfolio)
             .ThenInclude(p => p.Positions)
             .Include(o => o.Symbol)
-            .Where(o => o.Status == OrderStatus.PendingNextSessionOpen)
+            .Where(o => o.Status == OrderStatus.PendingNextSessionOpen && o.TargetExecutionSessionDate == sessionDate)
             .ToListAsync(cancellationToken);
 
         if (!pendingOrders.Any()) return 0;
@@ -490,7 +497,10 @@ public class PaperTradingService : IPaperTradingService
 
             if (stats?.Suspended == true || bar == null || bar.Open <= 0)
             {
-                _logger.LogInformation("Order {OrderId} for {Ticker} cannot fill on {SessionDate}: suspended or no open price.", order.Id, order.Symbol.Ticker, sessionDate);
+                _logger.LogInformation("Order {OrderId} for {Ticker} cannot fill on target session {SessionDate}: suspended or no valid open price. Order expired (no T+2 carry).",
+                    order.Id, order.Symbol.Ticker, sessionDate);
+                order.Status = OrderStatus.Expired;
+                order.CancellationReason = "No valid opening price on target execution session.";
                 continue;
             }
 
@@ -502,6 +512,7 @@ public class PaperTradingService : IPaperTradingService
                 _logger.LogWarning("Order {OrderId} cancelled due to insufficient cash balance (Required: {Cost}, Available: {Balance}).",
                     order.Id, totalCost, order.Portfolio.CashBalance);
                 order.Status = OrderStatus.Cancelled;
+                order.CancellationReason = $"Insufficient cash balance (Required: {totalCost:N2}, Available: {order.Portfolio.CashBalance:N2}).";
                 continue;
             }
 
@@ -550,6 +561,7 @@ public class PaperTradingService : IPaperTradingService
             order.Status = OrderStatus.Filled;
             order.FilledPrice = fillPrice;
             order.FilledAt = fillTimestampUtc;
+            order.ExecutedSessionDate = sessionDate;
             filledCount++;
 
             _logger.LogInformation("Filled pending T+1 paper order {OrderId} for {Ticker} ({Shares} shares at official OPEN {Price} TL on session {SessionDate})",

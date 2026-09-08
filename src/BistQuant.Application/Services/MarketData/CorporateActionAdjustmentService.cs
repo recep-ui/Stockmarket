@@ -1,6 +1,8 @@
 using BistQuant.Application.Common.Interfaces;
+using BistQuant.Domain.Entities;
 using BistQuant.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace BistQuant.Application.Services.MarketData;
@@ -8,13 +10,16 @@ namespace BistQuant.Application.Services.MarketData;
 public class CorporateActionAdjustmentService : ICorporateActionAdjustmentService
 {
     private readonly IApplicationDbContext _context;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<CorporateActionAdjustmentService> _logger;
 
     public CorporateActionAdjustmentService(
         IApplicationDbContext context,
+        IConfiguration configuration,
         ILogger<CorporateActionAdjustmentService> logger)
     {
         _context = context;
+        _configuration = configuration;
         _logger = logger;
     }
 
@@ -32,6 +37,7 @@ public class CorporateActionAdjustmentService : ICorporateActionAdjustmentServic
             return;
         }
 
+        bool autoAdjustmentEnabled = _configuration.GetValue<bool>("CorporateActions:AutomaticAdjustmentEnabled", false);
         var sessionDateUtc = sessionDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
 
         foreach (var record in actionsToProcess)
@@ -49,26 +55,44 @@ public class CorporateActionAdjustmentService : ICorporateActionAdjustmentServic
 
             if (prevBar == null || prevBar.Close <= 0) continue;
 
-            // Ratio of adjusted previous last price to raw unadjusted previous close
             var expectedPrevClose = record.PreviousLastPrice!.Value;
             var actualPrevClose = prevBar.Close;
 
             if (Math.Abs(expectedPrevClose - actualPrevClose) > 0.0001m)
             {
                 var factor = expectedPrevClose / actualPrevClose;
-                _logger.LogInformation(
-                    "Applying corporate action adjustment for {Ticker} on {Date}. Action: {Action}, Factor: {Factor:F6} (Prev: {PrevClose} -> Adj: {ExpectedClose})",
-                    record.Ticker, sessionDate, record.CorporateAction, factor, actualPrevClose, expectedPrevClose);
 
-                // Update historical bars adjusted close
-                var historicalBars = await _context.PriceBars
-                    .Where(b => b.SymbolId == symbol.Id && b.Timeframe == Timeframe.Daily && b.Timestamp <= prevBar.Timestamp)
-                    .ToListAsync(cancellationToken);
-
-                foreach (var bar in historicalBars)
+                // Create and store indicator continuity warning
+                var warning = new IndicatorContinuityWarning
                 {
-                    var basePrice = bar.AdjustedClose ?? bar.Close;
-                    bar.AdjustedClose = Math.Round(basePrice * factor, 4);
+                    SymbolId = symbol.Id,
+                    SessionDate = sessionDate,
+                    CorporateActionRaw = record.CorporateAction!,
+                    PreviousCloseReported = expectedPrevClose,
+                    PreviousRawCloseInDb = actualPrevClose,
+                    WarningMessage = $"Corporate action '{record.CorporateAction}' detected on session {sessionDate}. Bulletin expected previous close {expectedPrevClose} vs raw previous close {actualPrevClose} (Implied factor: {factor:F6}). Historical price bars preserved unadjusted.",
+                    IsAcknowledged = false
+                };
+
+                _context.IndicatorContinuityWarnings.Add(warning);
+
+                _logger.LogWarning(
+                    "Corporate action detected for {Ticker} on {Date}. Action: {Action}, Factor: {Factor:F6} (DbPrev: {PrevClose} -> BulletinPrev: {ExpectedClose}). Automatic historical adjustment is {Status}.",
+                    record.Ticker, sessionDate, record.CorporateAction, factor, actualPrevClose, expectedPrevClose,
+                    autoAdjustmentEnabled ? "ENABLED" : "DISABLED (raw history preserved)");
+
+                if (autoAdjustmentEnabled)
+                {
+                    // Update historical bars adjusted close ONLY if explicitly enabled
+                    var historicalBars = await _context.PriceBars
+                        .Where(b => b.SymbolId == symbol.Id && b.Timeframe == Timeframe.Daily && b.Timestamp <= prevBar.Timestamp)
+                        .ToListAsync(cancellationToken);
+
+                    foreach (var bar in historicalBars)
+                    {
+                        var basePrice = bar.AdjustedClose ?? bar.Close;
+                        bar.AdjustedClose = Math.Round(basePrice * factor, 4);
+                    }
                 }
             }
         }

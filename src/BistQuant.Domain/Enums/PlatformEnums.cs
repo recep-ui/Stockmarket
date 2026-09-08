@@ -43,7 +43,23 @@ public enum MarketDataImportStatus : byte
     Failed = 9,
     BulletinRevisionDetected = 10,
     Skipped = 11,
-    Processing = 12
+    Processing = 12,
+    DateMismatch = 13
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum BulletinDownloadStatus : byte
+{
+    Success = 1,
+    NotPublishedYet = 2,
+    RateLimited = 3,
+    ProviderUnavailable = 4,
+    InvalidSourceContent = 5,
+    SchemaMismatch = 6,
+    DateMismatch = 7,
+    AutomaticDownloadUnavailable = 8,
+    Cancelled = 9,
+    Failed = 10
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]

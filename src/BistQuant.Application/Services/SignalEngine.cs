@@ -35,6 +35,7 @@ public class SignalEngine : ISignalEngine
     private readonly ISignalClassifier _signalClassifier;
     private readonly ITechnicalAnalysisService _technicalService;
     private readonly IMarketDataFreshnessPolicy _freshnessPolicy;
+    private readonly IMarketSessionDateResolver _sessionDateResolver;
     private readonly ILogger<SignalEngine> _logger;
 
     [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
@@ -44,6 +45,7 @@ public class SignalEngine : ISignalEngine
         ISignalClassifier signalClassifier,
         ITechnicalAnalysisService technicalService,
         IMarketDataFreshnessPolicy freshnessPolicy,
+        IMarketSessionDateResolver sessionDateResolver,
         ILogger<SignalEngine> logger)
     {
         _context = context;
@@ -51,7 +53,19 @@ public class SignalEngine : ISignalEngine
         _signalClassifier = signalClassifier;
         _technicalService = technicalService;
         _freshnessPolicy = freshnessPolicy;
+        _sessionDateResolver = sessionDateResolver;
         _logger = logger;
+    }
+
+    public SignalEngine(
+        IApplicationDbContext context,
+        IStrategyEvaluationPipeline pipeline,
+        ISignalClassifier signalClassifier,
+        ITechnicalAnalysisService technicalService,
+        IMarketDataFreshnessPolicy freshnessPolicy,
+        ILogger<SignalEngine> logger)
+        : this(context, pipeline, signalClassifier, technicalService, freshnessPolicy, new MarketSessionDateResolver(), logger)
+    {
     }
 
     public SignalEngine(
@@ -59,7 +73,7 @@ public class SignalEngine : ISignalEngine
         IScoringEngine scoringEngine,
         ITechnicalAnalysisService technicalService,
         ILogger<SignalEngine> logger)
-        : this(context, null!, new SignalClassifier(), technicalService, new MarketDataFreshnessPolicy(), logger)
+        : this(context, null!, new SignalClassifier(), technicalService, new MarketDataFreshnessPolicy(), new MarketSessionDateResolver(), logger)
     {
     }
 
@@ -189,7 +203,7 @@ public class SignalEngine : ISignalEngine
         }
 
         // Extract session date and check for existing signal to guarantee idempotency across scan runs
-        var sessionDate = DateOnly.FromDateTime(latestBar.Timestamp);
+        var sessionDate = _sessionDateResolver.ResolveSessionDate(latestBar);
         var existingSignal = await _context.Signals
             .Include(s => s.Reasons)
             .FirstOrDefaultAsync(s =>
@@ -199,16 +213,57 @@ public class SignalEngine : ISignalEngine
                 s.SourceSessionDate == sessionDate,
                 cancellationToken);
 
-        if (existingSignal != null)
-        {
-            _logger.LogInformation(
-                "Signal for symbol {SymbolId}, strategy {StrategyId}, session {SessionDate} already exists. Returning existing signal (0 duplicates).",
-                symbolId, strategy?.Id, sessionDate);
-            return existingSignal;
-        }
-
         var risk = CalculateRiskParameters(latestBar.Close, snapshot);
         var expiresAt = CalculateExpiration(timeframe, DateTime.UtcNow);
+
+        if (existingSignal != null)
+        {
+            if (existingSignal.Price == latestBar.Close &&
+                existingSignal.Score == evalResult.TotalScore &&
+                existingSignal.SignalType == evalResult.SignalType &&
+                !existingSignal.IsSuperseded)
+            {
+                _logger.LogInformation(
+                    "Signal for symbol {SymbolId}, strategy {StrategyId}, session {SessionDate} already exists and matches. Returning existing signal (0 duplicates).",
+                    symbolId, strategy?.Id, sessionDate);
+                return existingSignal;
+            }
+
+            _logger.LogInformation(
+                "Bulletin revision or indicator recalculation detected for symbol {SymbolId}, session {SessionDate}. Updating existing signal deterministically.",
+                symbolId, sessionDate);
+
+            existingSignal.SignalType = evalResult.SignalType;
+            existingSignal.Score = evalResult.TotalScore;
+            existingSignal.TrendScore = evalResult.TrendScore;
+            existingSignal.MomentumScore = evalResult.MomentumScore;
+            existingSignal.VolumeScore = evalResult.VolumeScore;
+            existingSignal.StructureScore = evalResult.StructureScore;
+            existingSignal.Price = latestBar.Close;
+            existingSignal.StopLoss = risk.StopLoss;
+            existingSignal.TakeProfit1 = risk.TakeProfit1;
+            existingSignal.TakeProfit2 = risk.TakeProfit2;
+            existingSignal.RiskRewardRatio = risk.RiskRewardRatio;
+            existingSignal.Confidence = Math.Round(evalResult.TotalScore / 100.0m, 2);
+            existingSignal.ExpiresAt = expiresAt;
+            existingSignal.UpdatedAt = DateTime.UtcNow;
+            existingSignal.IsSuperseded = false;
+
+            existingSignal.Reasons.Clear();
+            foreach (var rule in evalResult.MatchedRules)
+            {
+                existingSignal.Reasons.Add(new SignalReason
+                {
+                    Code = rule,
+                    Title = rule,
+                    Description = $"Rule matched: {rule}",
+                    Indicator = rule.Split(' ')[0]
+                });
+            }
+
+            await _context.SaveChangesAsync(cancellationToken);
+            return existingSignal;
+        }
 
         var signal = new Signal
         {

@@ -33,6 +33,8 @@ public class BistQuantDbContext : DbContext, IApplicationDbContext
     public DbSet<WorkerHeartbeat> WorkerHeartbeats => Set<WorkerHeartbeat>();
     public DbSet<MarketDataImport> MarketDataImports => Set<MarketDataImport>();
     public DbSet<DailyInstrumentMarketStats> DailyInstrumentMarketStats => Set<DailyInstrumentMarketStats>();
+    public DbSet<BulletinFetchAttempt> BulletinFetchAttempts => Set<BulletinFetchAttempt>();
+    public DbSet<IndicatorContinuityWarning> IndicatorContinuityWarnings => Set<IndicatorContinuityWarning>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {

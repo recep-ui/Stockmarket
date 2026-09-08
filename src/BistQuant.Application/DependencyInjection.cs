@@ -11,11 +11,14 @@ public static class DependencyInjection
     {
         services.AddSingleton<IHolidayCalendar, ConfigurableHolidayCalendar>();
         services.AddSingleton<IMarketSessionCalendar, BistMarketSessionCalendar>();
+        services.AddSingleton<IMarketSessionDateResolver, MarketSessionDateResolver>();
         services.AddSingleton<IMarketScanScheduler, MarketScanScheduler>();
         services.AddSingleton<BistDailyBulletinParser>();
         services.AddScoped<ICorporateActionAdjustmentService, CorporateActionAdjustmentService>();
         services.AddScoped<ISignalClassifier, SignalClassifier>();
-        services.AddScoped<IMarketDataFreshnessPolicy, MarketDataFreshnessPolicy>();
+        services.AddScoped<IMarketDataFreshnessPolicy>(sp => new MarketDataFreshnessPolicy(
+            sp.GetService<Microsoft.Extensions.Configuration.IConfiguration>(),
+            sp.GetService<IMarketSessionCalendar>()));
         services.AddScoped<ITechnicalAnalysisService, TechnicalAnalysisService>();
         services.AddScoped<IScoringEngine, ScoringEngine>();
         services.AddScoped<IStrategyEvaluationPipeline, StrategyEvaluationPipeline>();
@@ -26,6 +29,7 @@ public static class DependencyInjection
             sp.GetRequiredService<ISignalClassifier>(),
             sp.GetRequiredService<ITechnicalAnalysisService>(),
             sp.GetRequiredService<IMarketDataFreshnessPolicy>(),
+            sp.GetRequiredService<IMarketSessionDateResolver>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SignalEngine>>()));
         services.AddScoped<IMarketScannerService, MarketScannerService>();
         services.AddScoped<IBacktestEngine, BacktestEngine>();

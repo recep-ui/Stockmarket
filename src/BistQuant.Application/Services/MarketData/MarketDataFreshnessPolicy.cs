@@ -8,10 +8,12 @@ namespace BistQuant.Application.Services.MarketData;
 public class MarketDataFreshnessPolicy : IMarketDataFreshnessPolicy
 {
     private readonly IConfiguration _configuration;
+    private readonly IMarketSessionCalendar? _calendar;
 
-    public MarketDataFreshnessPolicy(IConfiguration? configuration = null)
+    public MarketDataFreshnessPolicy(IConfiguration? configuration = null, IMarketSessionCalendar? calendar = null)
     {
         _configuration = configuration ?? new ConfigurationBuilder().Build();
+        _calendar = calendar;
     }
 
     public FreshnessCheckResult CheckFreshness(Timeframe timeframe, DateTime barTimestamp, DateTime? asOf = null)
@@ -73,6 +75,52 @@ public class MarketDataFreshnessPolicy : IMarketDataFreshnessPolicy
                 break;
 
             case Timeframe.Daily:
+                if (_calendar != null)
+                {
+                    // Daily checks compare session trading dates (DateOnly) rather than midnight timestamps against physical close time
+                    var barSessionDate = DateOnly.FromDateTime(barTimestamp);
+                    var turkeyTz = _calendar.MarketTimeZone;
+                    var localRef = TimeZoneInfo.ConvertTimeFromUtc(referenceTime, turkeyTz);
+                    var todayDate = DateOnly.FromDateTime(localRef);
+
+                    bool isTradingToday = _calendar.IsTradingDay(todayDate);
+                    DateTime pubTimeUtc = isTradingToday ? _calendar.GetBulletinPublicationTimeUtc(todayDate) : DateTime.MaxValue;
+
+                    DateOnly expectedSessionDate;
+                    if (isTradingToday && referenceTime >= pubTimeUtc)
+                    {
+                        expectedSessionDate = todayDate;
+                    }
+                    else
+                    {
+                        expectedSessionDate = _calendar.GetPreviousTradingDay(todayDate);
+                    }
+
+                    if (barSessionDate >= expectedSessionDate)
+                    {
+                        return new FreshnessCheckResult(true, age, TimeSpan.FromDays(1), $"Daily bar for session {barSessionDate:yyyy-MM-dd} is fresh for expected session {expectedSessionDate:yyyy-MM-dd}.");
+                    }
+
+                    int missedTradingDays = 0;
+                    var cur = barSessionDate;
+                    while (cur < expectedSessionDate && missedTradingDays < 30)
+                    {
+                        cur = _calendar.GetNextTradingDay(cur);
+                        missedTradingDays++;
+                    }
+
+                    var maxAllowedLag = _configuration.GetValue<int?>("FreshnessThresholds:DailyAllowedSessionLag") ?? 1;
+                    bool isDailyFresh = missedTradingDays <= maxAllowedLag;
+                    return new FreshnessCheckResult(
+                        isDailyFresh,
+                        age,
+                        TimeSpan.FromDays(missedTradingDays),
+                        isDailyFresh
+                            ? $"Daily bar session {barSessionDate:yyyy-MM-dd} is {missedTradingDays} session(s) behind expected {expectedSessionDate:yyyy-MM-dd} (allowed: {maxAllowedLag})."
+                            : $"Stale: Daily bar session {barSessionDate:yyyy-MM-dd} is {missedTradingDays} trading session(s) behind expected {expectedSessionDate:yyyy-MM-dd}."
+                    );
+                }
+
                 var daily = _configuration.GetValue<int?>("FreshnessThresholds:DailyDays") ?? 4;
                 maxAge = TimeSpan.FromDays(daily);
                 break;

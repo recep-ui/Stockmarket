@@ -114,8 +114,15 @@ public class SignalConfiguration : IEntityTypeConfiguration<Signal>
         builder.HasIndex(s => new { s.Timeframe, s.CreatedAt, s.Score })
                .HasDatabaseName("IX_Signals_Timeframe_CreatedAt_Score");
 
-        builder.HasIndex(s => new { s.SymbolId, s.StrategyId, s.Timeframe, s.SourceSessionDate })
-               .HasDatabaseName("IX_Signals_Symbol_Strategy_Timeframe_SessionDate");
+        builder.HasIndex(s => new { s.SymbolId, s.SourceSessionDate, s.Timeframe })
+               .IsUnique()
+               .HasFilter("StrategyId IS NULL")
+               .HasDatabaseName("UIX_Signals_Symbol_SessionDate_Timeframe_NoStrategy");
+
+        builder.HasIndex(s => new { s.SymbolId, s.StrategyId, s.SourceSessionDate, s.Timeframe })
+               .IsUnique()
+               .HasFilter("StrategyId IS NOT NULL")
+               .HasDatabaseName("UIX_Signals_Symbol_Strategy_SessionDate_Timeframe");
 
         builder.HasOne(s => s.Symbol)
                .WithMany(sym => sym.Signals)
@@ -322,9 +329,14 @@ public class PaperOrderConfiguration : IEntityTypeConfiguration<PaperOrder>
                .HasForeignKey(o => o.SymbolId)
                .OnDelete(DeleteBehavior.Restrict);
 
+        builder.Property(o => o.CancellationReason).HasMaxLength(500);
+
         builder.HasIndex(o => new { o.PortfolioId, o.ClientOrderId })
                .IsUnique()
                .HasFilter("ClientOrderId IS NOT NULL");
+
+        builder.HasIndex(o => new { o.Status, o.TargetExecutionSessionDate })
+               .HasDatabaseName("IX_PaperOrders_Status_TargetExecutionSessionDate");
     }
 }
 
@@ -458,8 +470,16 @@ public class MarketDataImportConfiguration : IEntityTypeConfiguration<MarketData
         builder.Property(m => m.SchemaVersion).HasMaxLength(20).IsRequired();
         builder.Property(m => m.ErrorMessage).HasMaxLength(2000);
 
-        builder.HasIndex(m => new { m.SessionDate, m.Sha256 });
+        builder.HasIndex(m => new { m.Provider, m.SessionDate, m.Sha256 })
+               .IsUnique()
+               .HasDatabaseName("UIX_MarketDataImports_Provider_SessionDate_Sha256");
+
         builder.HasIndex(m => new { m.Provider, m.SessionDate });
+
+        builder.HasOne(m => m.SupersedesImport)
+               .WithMany()
+               .HasForeignKey(m => m.SupersedesImportId)
+               .OnDelete(DeleteBehavior.Restrict);
     }
 }
 
@@ -489,6 +509,36 @@ public class DailyInstrumentMarketStatsConfiguration : IEntityTypeConfiguration<
                .WithMany()
                .HasForeignKey(d => d.SourceImportId)
                .OnDelete(DeleteBehavior.SetNull);
+    }
+}
+
+public class BulletinFetchAttemptConfiguration : IEntityTypeConfiguration<BulletinFetchAttempt>
+{
+    public void Configure(EntityTypeBuilder<BulletinFetchAttempt> builder)
+    {
+        builder.HasKey(a => a.Id);
+        builder.Property(a => a.SourceUrl).HasMaxLength(500).IsRequired();
+        builder.Property(a => a.ErrorMessage).HasMaxLength(2000);
+        builder.Property(a => a.Sha256).HasMaxLength(64);
+        builder.HasIndex(a => new { a.SessionDate, a.AttemptedAtUtc });
+    }
+}
+
+public class IndicatorContinuityWarningConfiguration : IEntityTypeConfiguration<IndicatorContinuityWarning>
+{
+    public void Configure(EntityTypeBuilder<IndicatorContinuityWarning> builder)
+    {
+        builder.HasKey(w => w.Id);
+        builder.Property(w => w.CorporateActionRaw).HasMaxLength(200);
+        builder.Property(w => w.PreviousCloseReported).HasPrecision(18, 4);
+        builder.Property(w => w.PreviousRawCloseInDb).HasPrecision(18, 4);
+        builder.Property(w => w.WarningMessage).HasMaxLength(1000).IsRequired();
+        builder.HasIndex(w => new { w.SymbolId, w.SessionDate });
+
+        builder.HasOne(w => w.Symbol)
+               .WithMany()
+               .HasForeignKey(w => w.SymbolId)
+               .OnDelete(DeleteBehavior.Cascade);
     }
 }
 

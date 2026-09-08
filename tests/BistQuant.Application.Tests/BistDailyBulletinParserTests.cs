@@ -90,7 +90,7 @@ public class BistDailyBulletinParserTests
         // 2: High < Low invalid bar
         var csv =
             "2026-03-18;NOTRD.E;NO TRADE STOCK;A;Z;MSPOT;EQT;MSPOTEQT;MSPOTEQTNOTRD;SI;0;0;0;0;;0;20.0;0;0;0;0;0;0;0;0;0;0;0;0;0;0\n" +
-            "2026-03-18;BADBR.E;BAD BAR STOCK;A;Z;MSPOT;EQT;MSPOTEQTBADBR;SI;0;0;0;0;;0;20.0;25.0;0;0;30.0;20.0;22.0;0;0;0;0;22.0;1000;100;1\n";
+            "2026-03-18;BADBR.E;BAD BAR STOCK;A;Z;MSPOT;EQT;MSPOTEQT;MSPOTEQTBADBR;SI;0;0;0;0;;0;20.0;25.0;0;30.0;20.0;22.0;0;0;0;0;0;22.0;1000;100;1\n";
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(csv));
         var result = _parser.Parse(stream);
@@ -105,7 +105,7 @@ public class BistDailyBulletinParserTests
     {
         // Corporate action BDL (Bedelli) and comma formatted prices
         var csv =
-            "2026-03-18;SPLIT.E;SPLIT CORP;A;Z;MSPOT;EQT;MSPOTEQT;MSPOTEQTSPLIT;SI;0;0;0;0;BDL;0;100,0;50,0;0;0;48,0;52,0;51,0;51,0;2,0;0;0;50,5;505000;10000;20\n";
+            "2026-03-18;SPLIT.E;SPLIT CORP;A;Z;MSPOT;EQT;MSPOTEQT;MSPOTEQTSPLIT;SI;0;0;0;0;BDL;0;100,0;50,0;0;48,0;52,0;51,0;51,0;2,0;0;0;50,5;505000;10000;20;0\n";
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(csv));
         var result = _parser.Parse(stream);

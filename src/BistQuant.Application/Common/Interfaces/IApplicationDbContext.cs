@@ -28,6 +28,8 @@ public interface IApplicationDbContext
     DbSet<WorkerHeartbeat> WorkerHeartbeats { get; }
     DbSet<MarketDataImport> MarketDataImports { get; }
     DbSet<DailyInstrumentMarketStats> DailyInstrumentMarketStats { get; }
+    DbSet<BulletinFetchAttempt> BulletinFetchAttempts { get; }
+    DbSet<IndicatorContinuityWarning> IndicatorContinuityWarnings { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

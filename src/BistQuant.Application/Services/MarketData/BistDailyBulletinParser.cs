@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using BistQuant.Domain.Enums;
 
 namespace BistQuant.Application.Services.MarketData;
 
@@ -36,20 +37,26 @@ public record BistBulletinParseResult(
     int TotalRowsRead,
     int AcceptedRows,
     int RejectedRows,
-    IReadOnlyList<string> ParseErrors
-);
+    IReadOnlyList<string> ParseErrors,
+    bool IsSchemaMismatch = false,
+    bool IsDateMismatch = false
+)
+{
+    public bool IsSuccess => !IsSchemaMismatch && !IsDateMismatch && (Records.Count > 0 || TotalRowsRead > 0);
+    public IReadOnlyList<string> Errors => ParseErrors;
+}
 
 public class BistDailyBulletinParser
 {
     private static readonly string[] DateFormats = { "yyyy-MM-dd", "yyyyMMdd", "dd/MM/yyyy", "dd.MM.yyyy", "yyyy/MM/dd" };
 
-    public BistBulletinParseResult Parse(Stream stream)
+    public BistBulletinParseResult Parse(Stream stream, DateOnly? expectedDate = null)
     {
         using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
-        return Parse(reader);
+        return Parse(reader, expectedDate);
     }
 
-    public BistBulletinParseResult Parse(TextReader reader)
+    public BistBulletinParseResult Parse(TextReader reader, DateOnly? expectedDate = null)
     {
         var records = new List<BistBulletinEquityRecord>();
         var errors = new List<string>();
@@ -57,6 +64,10 @@ public class BistDailyBulletinParser
         int acceptedRows = 0;
         int rejectedRows = 0;
         DateOnly? detectedSessionDate = null;
+
+        // Dynamic column index map initialized with standard v1.14 defaults
+        var colMap = new ColumnIndexMap();
+        bool headerProcessed = false;
 
         string? line;
         while ((line = reader.ReadLine()) != null)
@@ -67,107 +78,177 @@ public class BistDailyBulletinParser
             }
 
             totalRows++;
-
-            // Format is semicolon-separated
             var parts = line.Split(';');
-            if (parts.Length < 24)
-            {
-                // Likely a header line or malformed footer
-                if (totalRows <= 5)
-                {
-                    // Normal header line
-                    continue;
-                }
 
-                rejectedRows++;
-                if (errors.Count < 50)
-                {
-                    errors.Add($"Line {totalRows}: Insufficient columns ({parts.Length} < 24)");
-                }
-                continue;
-            }
-
-            // Attempt to parse Date in column 0
-            var dateStr = parts[0].Trim();
-            if (!TryParseDate(dateStr, out var date))
+            // 1. Check minimum column count
+            if (parts.Length < BistBulletinSchemaV114.MinimumColumnCount)
             {
-                // If it's the first few lines, it's the header row (Turkish or English)
+                // If it's within the first 3 lines, it could be an invalid header or truncated header
                 if (totalRows <= 3)
                 {
+                    // Check if it's an HTML tag or malformed document
+                    var trimmed = line.TrimStart();
+                    if (trimmed.StartsWith("<html", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("<!doctype", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return new BistBulletinParseResult(
+                            SessionDate: null,
+                            Records: Array.Empty<BistBulletinEquityRecord>(),
+                            TotalRowsRead: totalRows,
+                            AcceptedRows: 0,
+                            RejectedRows: totalRows,
+                            ParseErrors: new[] { "Input content appears to be an HTML page, not a valid BIST CSV bulletin." },
+                            IsSchemaMismatch: true
+                        );
+                    }
+                }
+
+                errors.Add($"Line {totalRows}: Column count ({parts.Length}) is less than minimum required {BistBulletinSchemaV114.MinimumColumnCount}.");
+                return new BistBulletinParseResult(
+                    SessionDate: detectedSessionDate,
+                    Records: Array.Empty<BistBulletinEquityRecord>(),
+                    TotalRowsRead: totalRows,
+                    AcceptedRows: 0,
+                    RejectedRows: totalRows,
+                    ParseErrors: errors,
+                    IsSchemaMismatch: true
+                );
+            }
+
+            // 2. Check if this line is a header row
+            var firstCell = parts[0].Trim();
+            if (!TryParseDate(firstCell, out var rowDate))
+            {
+                // It is a header line (e.g., Turkish or English)
+                if (totalRows <= 3)
+                {
+                    var headerError = TryProcessHeader(parts, colMap);
+                    if (headerError != null && !headerProcessed)
+                    {
+                        // Check if it's English or Turkish header
+                        errors.Add($"Header validation failure on line {totalRows}: {headerError}");
+                        // If it's clearly a header row with unrecognized concepts, reject schema
+                        if (LooksLikeHeader(parts))
+                        {
+                            return new BistBulletinParseResult(
+                                SessionDate: null,
+                                Records: Array.Empty<BistBulletinEquityRecord>(),
+                                TotalRowsRead: totalRows,
+                                AcceptedRows: 0,
+                                RejectedRows: totalRows,
+                                ParseErrors: errors,
+                                IsSchemaMismatch: true
+                            );
+                        }
+                    }
+                    else if (headerError == null)
+                    {
+                        headerProcessed = true;
+                    }
                     continue;
                 }
 
+                // Non-header row with unparseable date
                 rejectedRows++;
                 if (errors.Count < 50)
                 {
-                    errors.Add($"Line {totalRows}: Unable to parse date '{dateStr}'");
+                    errors.Add($"Line {totalRows}: Unable to parse session date '{firstCell}'.");
                 }
                 continue;
             }
 
-            detectedSessionDate ??= date;
+            // 3. Date Validation & Layout Detection
+            if (detectedSessionDate == null)
+            {
+                detectedSessionDate = rowDate;
 
-            // Column 6: INSTRUMENT GROUP (must be "EQT" for Equities)
-            // Note: Section 2.1.4:
-            // 0: DATE, 1: INSTRUMENT SERIES CODE, 2: INSTRUMENT NAME, 3: A,B,C,D GROUP,
-            // 4: MARKET SEGMENT, 5: MARKET, 6: INSTRUMENT GROUP, 7: INSTRUMENT TYPE
-            var instrumentGroup = parts.Length > 6 ? parts[6].Trim().ToUpperInvariant() : string.Empty;
 
-            // Ignore non-equity instruments (e.g. warrants ECW, indices SP, funds, certificates, debt)
+
+                // Validate target date matches bulletin date
+                if (expectedDate.HasValue && rowDate != expectedDate.Value)
+                {
+                    errors.Add($"Date mismatch: Requested session date was {expectedDate.Value:yyyy-MM-dd}, but bulletin contains date {rowDate:yyyy-MM-dd}.");
+                    return new BistBulletinParseResult(
+                        SessionDate: rowDate,
+                        Records: Array.Empty<BistBulletinEquityRecord>(),
+                        TotalRowsRead: totalRows,
+                        AcceptedRows: 0,
+                        RejectedRows: totalRows,
+                        ParseErrors: errors,
+                        IsDateMismatch: true
+                    );
+                }
+            }
+            else if (rowDate != detectedSessionDate.Value)
+            {
+                // Multi-date contamination within a single daily bulletin
+                errors.Add($"Line {totalRows}: Mixed session dates detected ({rowDate:yyyy-MM-dd} vs {detectedSessionDate.Value:yyyy-MM-dd}).");
+                return new BistBulletinParseResult(
+                    SessionDate: detectedSessionDate,
+                    Records: Array.Empty<BistBulletinEquityRecord>(),
+                    TotalRowsRead: totalRows,
+                    AcceptedRows: 0,
+                    RejectedRows: totalRows,
+                    ParseErrors: errors,
+                    IsDateMismatch: true
+                );
+            }
+
+            // 4. Instrument Group Validation (must be EQT)
+            var instrumentGroup = GetValue(parts, colMap.InstrumentGroup).ToUpperInvariant();
             if (!string.Equals(instrumentGroup, "EQT", StringComparison.OrdinalIgnoreCase))
             {
+                // Warrants (WNT/ECW), indices, funds, certificates, debt are skipped
                 rejectedRows++;
                 continue;
             }
 
-            // Column 1: INSTRUMENT SERIES CODE (e.g. "THYAO.E" or "GARAN.E")
-            var seriesCode = parts[1].Trim().ToUpperInvariant();
-            if (string.IsNullOrEmpty(seriesCode))
+            // 5. Instrument Series Code & Ticker Normalization
+            var seriesCode = GetValue(parts, colMap.SeriesCode).ToUpperInvariant();
+            if (string.IsNullOrWhiteSpace(seriesCode))
             {
                 rejectedRows++;
                 continue;
             }
 
-            // Normalize ticker: only after confirming EQT, strip trailing .E
+            // Strip trailing .E only after confirming EQT
             var ticker = seriesCode;
             if (ticker.EndsWith(".E", StringComparison.OrdinalIgnoreCase))
             {
                 ticker = ticker[..^2];
             }
 
-            // Reject invalid or synthetic test tickers
             if (string.IsNullOrWhiteSpace(ticker))
             {
                 rejectedRows++;
                 continue;
             }
 
-            var instrumentName = parts.Length > 2 ? parts[2].Trim() : string.Empty;
-            var marketSegment = parts.Length > 4 ? parts[4].Trim() : null;
-            var instrumentType = parts.Length > 7 ? parts[7].Trim() : null;
-            var tradingMethod = parts.Length > 9 ? parts[9].Trim() : null;
+            var instrumentName = GetValue(parts, colMap.InstrumentName);
+            var marketSegment = GetOptionalValue(parts, colMap.MarketSegment);
+            var instrumentType = GetOptionalValue(parts, colMap.InstrumentType);
+            var tradingMethod = GetOptionalValue(parts, colMap.TradingMethod);
 
-            var isBist100 = parts.Length > 11 && parts[11].Trim() == "1";
-            var isBist30 = parts.Length > 12 && parts[12].Trim() == "1";
+            var isBist100 = GetValue(parts, colMap.Bist100Index) == "1";
+            var isBist30 = GetValue(parts, colMap.Bist30Index) == "1";
 
-            var corporateAction = parts.Length > 14 && !string.IsNullOrWhiteSpace(parts[14]) ? parts[14].Trim() : null;
-            var suspended = parts.Length > 15 && parts[15].Trim() == "1";
+            var corporateAction = GetOptionalValue(parts, colMap.CorporateAction);
+            var suspended = GetValue(parts, colMap.Suspended) == "1";
 
-            var prevLastPrice = parts.Length > 16 ? ParseDecimal(parts[16]) : null;
-            var open = parts.Length > 17 ? ParseDecimal(parts[17]) : null;
-            var low = parts.Length > 20 ? ParseDecimal(parts[20]) : null;
-            var high = parts.Length > 21 ? ParseDecimal(parts[21]) : null;
-            var close = parts.Length > 22 ? ParseDecimal(parts[22]) : null;
-            var closingSessionPrice = parts.Length > 23 ? ParseDecimal(parts[23]) : null;
+            var prevLastPrice = ParseDecimal(GetValue(parts, colMap.PreviousLastPrice));
+            var open = ParseDecimal(GetValue(parts, colMap.Open));
+            var low = ParseDecimal(GetValue(parts, colMap.Low));
+            var high = ParseDecimal(GetValue(parts, colMap.High));
+            var close = ParseDecimal(GetValue(parts, colMap.Close));
+            var closingSessionPrice = ParseDecimal(GetValue(parts, colMap.ClosingSessionPrice));
+            var changePercent = ParseDecimal(GetValue(parts, colMap.ChangePercent));
+            var vwap = ParseDecimal(GetValue(parts, colMap.Vwap));
+            var totalTradedValue = ParseDecimal(GetValue(parts, colMap.TotalTradedValue));
+            var totalTradedVolume = ParseDecimal(GetValue(parts, colMap.TotalTradedVolume));
+            var totalContracts = ParseLong(GetValue(parts, colMap.TotalNumberOfContracts));
 
-            var changePercent = parts.Length > 24 ? ParseDecimal(parts[24]) : null;
-            var vwap = parts.Length > 27 ? ParseDecimal(parts[27]) : null;
-            var totalTradedValue = parts.Length > 28 ? ParseDecimal(parts[28]) : null;
-            var totalTradedVolume = parts.Length > 29 ? ParseDecimal(parts[29]) : null;
-            var totalContracts = parts.Length > 30 ? ParseLong(parts[30]) : null;
-
-            // Strict OHLC validation:
-            // Valid bar must have Open > 0, High > 0, Low > 0, Close > 0, High >= Low, High >= Open, High >= Close, Low <= Open, Low <= Close
+            // Strict OHLC Integrity Check
+            // A valid daily price bar requires: not suspended, positive prices, High >= Low, High >= Open, High >= Close, Low <= Open, Low <= Close, Volume >= 0
             bool hasValidOhlc = !suspended
                 && open.HasValue && open.Value > 0
                 && high.HasValue && high.Value > 0
@@ -181,7 +262,7 @@ public class BistDailyBulletinParser
                 && (totalTradedVolume ?? 0) >= 0;
 
             records.Add(new BistBulletinEquityRecord(
-                Date: date,
+                Date: rowDate,
                 SeriesCode: seriesCode,
                 Ticker: ticker,
                 InstrumentName: instrumentName,
@@ -220,7 +301,76 @@ public class BistDailyBulletinParser
         );
     }
 
-    private static bool TryParseDate(string input, out DateOnly date)
+    private static bool LooksLikeHeader(string[] parts)
+    {
+        var lineText = string.Join(" ", parts).ToUpperInvariant();
+        return lineText.Contains("TARIH") || lineText.Contains("TRADE DATE") ||
+               lineText.Contains("INSTRUMENT") || lineText.Contains("FIYAT");
+    }
+
+    private static string? TryProcessHeader(string[] headers, ColumnIndexMap map)
+    {
+        var upperHeaders = headers.Select(h => h.Trim().ToUpperInvariant()).ToArray();
+
+        // Check required concepts
+        bool hasDate = upperHeaders.Any(h => h.Contains("TARIH") || h.Contains("TRADE DATE") || h == "DATE");
+        bool hasSeries = upperHeaders.Any(h => h.Contains("ISLEM  KODU") || h.Contains("ISLEM KODU") || h.Contains("SERIES CODE") || h.Contains("INSTRUMENT CODE") || h.Contains("KIYMET KODU") || h.Contains("MENKUL KODU"));
+        bool hasGroup = upperHeaders.Any(h => h.Contains("ENSTRUMAN GRUBU") || h.Contains("MENKUL GRUBU") || h.Contains("INSTRUMENT GROUP") || h == "GRUP");
+        bool hasOpen = upperHeaders.Any(h => h == "ACILIS FIYATI" || h == "OPENING PRICE" || h == "ACILIS");
+        bool hasLow = upperHeaders.Any(h => h == "EN DUSUK FIYAT" || h == "LOWEST PRICE" || h == "EN DUSUK");
+        bool hasHigh = upperHeaders.Any(h => h == "EN YUKSEK FIYAT" || h == "HIGHEST PRICE" || h == "EN YUKSEK");
+        bool hasClose = upperHeaders.Any(h => h == "KAPANIS FIYATI" || h == "CLOSING PRICE" || h == "KAPANIS");
+        bool hasVolume = upperHeaders.Any(h => h.Contains("TOPLAM ISLEM ADEDI") || h.Contains("TOTAL TRADED VOLUME") || h.Contains("TOPLAM ISLEM HACMI") || h.Contains("TOTAL TRADED VALUE"));
+
+        if (!hasDate || !hasSeries || !hasGroup || !hasOpen || !hasLow || !hasHigh || !hasClose || !hasVolume)
+        {
+            return "Missing one or more required header concepts: DATE, SERIES CODE, INSTRUMENT GROUP, OPENING PRICE, LOWEST PRICE, HIGHEST PRICE, CLOSING PRICE, VOLUME.";
+        }
+
+        // Dynamically resolve column positions from header
+        for (int i = 0; i < upperHeaders.Length; i++)
+        {
+            var h = upperHeaders[i];
+            if (h.Contains("TARIH") || h.Contains("TRADE DATE") || h == "DATE") map.Date = i;
+            else if (h.Contains("ISLEM  KODU") || h.Contains("ISLEM KODU") || h.Contains("SERIES CODE") || h.Contains("KIYMET KODU") || h.Contains("MENKUL KODU")) map.SeriesCode = i;
+            else if (h.Contains("BULTEN ADI") || h.Contains("INSTRUMENT NAME") || h.Contains("KIYMET ADI") || h.Contains("MENKUL ADI")) map.InstrumentName = i;
+            else if (h == "PAZAR" || h == "MARKET SEGMENT") map.MarketSegment = i;
+            else if (h == "ENSTRUMAN GRUBU" || h == "MENKUL GRUBU" || h == "INSTRUMENT GROUP") map.InstrumentGroup = i;
+            else if (h == "ENSTRUMAN TIPI" || h == "MENKUL TURU" || h == "INSTRUMENT TYPE") map.InstrumentType = i;
+            else if (h == "ISLEM YONTEMI" || h == "TRADING METHOD") map.TradingMethod = i;
+            else if (h.Contains("BIST 100")) map.Bist100Index = i;
+            else if (h.Contains("BIST 30")) map.Bist30Index = i;
+            else if (h.Contains("OZSERMAYE") || h.Contains("CORPORATE ACTION") || h.Contains("SIRKET ISLEMI")) map.CorporateAction = i;
+            else if (h.Contains("DURDURMA") || h == "SUSPENDED" || h.Contains("ISLEM GORMEYEN")) map.Suspended = i;
+            else if (h.Contains("ONCEKI KAPANIS") || h.Contains("PREVIOUS LAST PRICE")) map.PreviousLastPrice = i;
+            else if (h == "ACILIS FIYATI" || h == "OPENING PRICE" || h == "ACILIS") map.Open = i;
+            else if (h == "EN DUSUK FIYAT" || h == "LOWEST PRICE" || h == "EN DUSUK") map.Low = i;
+            else if (h == "EN YUKSEK FIYAT" || h == "HIGHEST PRICE" || h == "EN YUKSEK") map.High = i;
+            else if (h == "KAPANIS FIYATI" || h == "CLOSING PRICE" || h == "KAPANIS") map.Close = i;
+            else if (h.Contains("KAPANIS SEANSI") || h.Contains("CLOSING SESSION PRICE")) map.ClosingSessionPrice = i;
+            else if (h.Contains("DEGISIM") || h.Contains("CHANGE") || h.Contains("FIYAT DEG")) map.ChangePercent = i;
+            else if (h == "A.O.F" || h == "AOF" || h == "VWAP") map.Vwap = i;
+            else if (h.Contains("TOPLAM ISLEM HACMI") || h.Contains("TOTAL TRADED VALUE")) map.TotalTradedValue = i;
+            else if (h.Contains("TOPLAM ISLEM ADEDI") || h.Contains("TOTAL TRADED VOLUME")) map.TotalTradedVolume = i;
+            else if (h.Contains("SOZLESME SAYISI") || h.Contains("NUMBER OF CONTRACTS") || h.Contains("TOPLAM SOZLESME")) map.TotalNumberOfContracts = i;
+        }
+
+        return null;
+    }
+
+    private static string GetValue(string[] parts, int index)
+    {
+        return index >= 0 && index < parts.Length ? parts[index].Trim() : string.Empty;
+    }
+
+    private static string? GetOptionalValue(string[] parts, int index)
+    {
+        if (index < 0 || index >= parts.Length) return null;
+        var val = parts[index].Trim();
+        return string.IsNullOrWhiteSpace(val) ? null : val;
+    }
+
+    public static bool TryParseDate(string input, out DateOnly date)
     {
         if (DateOnly.TryParseExact(input, DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out date))
         {
@@ -237,12 +387,54 @@ public class BistDailyBulletinParser
         return false;
     }
 
-    private static decimal? ParseDecimal(string input)
+    public static decimal? ParseDecimal(string input)
     {
         if (string.IsNullOrWhiteSpace(input)) return null;
 
-        var clean = input.Trim().Replace(',', '.');
-        if (decimal.TryParse(clean, NumberStyles.Any, CultureInfo.InvariantCulture, out var val))
+        var text = input.Trim();
+
+        // 1. If text contains a single comma and no period, and it's not a 3-digit thousand grouping (e.g. "100,0", "50,5", "2,0", "100,50")
+        // Treat as decimal separator
+        if (text.Contains(',') && !text.Contains('.'))
+        {
+            int firstComma = text.IndexOf(',');
+            int lastComma = text.LastIndexOf(',');
+            if (firstComma == lastComma)
+            {
+                int digitsAfterComma = text.Length - 1 - firstComma;
+                if (digitsAfterComma != 3)
+                {
+                    if (decimal.TryParse(text.Replace(',', '.'), NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out var decVal))
+                    {
+                        return decVal;
+                    }
+                }
+            }
+        }
+
+        // 2. Official convention: Decimal separator = '.', Thousands separator = ','
+        // Examples: 315.25, 1,234.56, 109,723.61, 1500000000, 5,000,000
+        if (decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out var invVal))
+        {
+            return invVal;
+        }
+
+        // 3. Fallback for potential Turkish locale representation
+        var trCulture = CultureInfo.GetCultureInfo("tr-TR");
+        if (decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowExponent, trCulture, out var trVal))
+        {
+            return trVal;
+        }
+
+        return null;
+    }
+
+    public static long? ParseLong(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return null;
+
+        var text = input.Trim();
+        if (long.TryParse(text, NumberStyles.Integer | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var val))
         {
             return val;
         }
@@ -250,16 +442,29 @@ public class BistDailyBulletinParser
         return null;
     }
 
-    private static long? ParseLong(string input)
+    private class ColumnIndexMap
     {
-        if (string.IsNullOrWhiteSpace(input)) return null;
-
-        var clean = input.Trim();
-        if (long.TryParse(clean, NumberStyles.Any, CultureInfo.InvariantCulture, out var val))
-        {
-            return val;
-        }
-
-        return null;
+        public int Date { get; set; } = BistBulletinSchemaV114.Date;
+        public int SeriesCode { get; set; } = BistBulletinSchemaV114.SeriesCode;
+        public int InstrumentName { get; set; } = BistBulletinSchemaV114.InstrumentName;
+        public int MarketSegment { get; set; } = BistBulletinSchemaV114.MarketSegment;
+        public int InstrumentGroup { get; set; } = BistBulletinSchemaV114.InstrumentGroup;
+        public int InstrumentType { get; set; } = BistBulletinSchemaV114.InstrumentType;
+        public int TradingMethod { get; set; } = BistBulletinSchemaV114.TradingMethod;
+        public int Bist100Index { get; set; } = BistBulletinSchemaV114.Bist100Index;
+        public int Bist30Index { get; set; } = BistBulletinSchemaV114.Bist30Index;
+        public int CorporateAction { get; set; } = BistBulletinSchemaV114.CorporateAction;
+        public int Suspended { get; set; } = BistBulletinSchemaV114.Suspended;
+        public int PreviousLastPrice { get; set; } = BistBulletinSchemaV114.PreviousLastPrice;
+        public int Open { get; set; } = BistBulletinSchemaV114.Open;
+        public int Low { get; set; } = BistBulletinSchemaV114.Low;
+        public int High { get; set; } = BistBulletinSchemaV114.High;
+        public int Close { get; set; } = BistBulletinSchemaV114.Close;
+        public int ClosingSessionPrice { get; set; } = BistBulletinSchemaV114.ClosingSessionPrice;
+        public int ChangePercent { get; set; } = BistBulletinSchemaV114.ChangePercent;
+        public int Vwap { get; set; } = BistBulletinSchemaV114.Vwap;
+        public int TotalTradedValue { get; set; } = BistBulletinSchemaV114.TotalTradedValue;
+        public int TotalTradedVolume { get; set; } = BistBulletinSchemaV114.TotalTradedVolume;
+        public int TotalNumberOfContracts { get; set; } = BistBulletinSchemaV114.TotalNumberOfContracts;
     }
 }

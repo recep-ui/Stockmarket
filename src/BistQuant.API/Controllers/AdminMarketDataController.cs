@@ -103,13 +103,37 @@ public class AdminMarketDataController : ControllerBase
             return BadRequest(ApiResponse<MarketDataImport>.Fail("Only .csv or .zip official bulletin files are accepted."));
         }
 
+        using var stream = file.OpenReadStream();
+        var headerBytes = new byte[32];
+        var bytesRead = await stream.ReadAsync(headerBytes, 0, headerBytes.Length, cancellationToken);
+        stream.Position = 0;
+
+        if (ext == ".zip")
+        {
+            if (bytesRead < 4 || headerBytes[0] != 0x50 || headerBytes[1] != 0x4B)
+            {
+                return BadRequest(ApiResponse<MarketDataImport>.Fail("Uploaded .zip file does not match PK zip archive magic header signature."));
+            }
+        }
+        else if (ext == ".csv")
+        {
+            var previewText = System.Text.Encoding.UTF8.GetString(headerBytes.Take(bytesRead).ToArray()).TrimStart();
+            if (previewText.StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) ||
+                previewText.StartsWith("<html", StringComparison.OrdinalIgnoreCase) ||
+                previewText.StartsWith("<?xml", StringComparison.OrdinalIgnoreCase) ||
+                (headerBytes[0] == 0x7F && headerBytes[1] == 0x45 && headerBytes[2] == 0x4C && headerBytes[3] == 0x46) ||
+                (headerBytes[0] == 0x4D && headerBytes[1] == 0x5A))
+            {
+                return BadRequest(ApiResponse<MarketDataImport>.Fail("Uploaded .csv file contains invalid content (HTML, XML, or binary executable signature)."));
+            }
+        }
+
         DateOnly? dateHint = null;
         if (!string.IsNullOrWhiteSpace(sessionDateStr) && DateOnly.TryParse(sessionDateStr, out var parsedDate))
         {
             dateHint = parsedDate;
         }
 
-        using var stream = file.OpenReadStream();
         var import = await _bulletinProvider.ImportBulletinStreamAsync(dateHint, file.FileName, stream, cancellationToken);
 
         return Ok(ApiResponse<MarketDataImport>.Ok(import));

@@ -56,8 +56,14 @@ public class PaperOrder : BaseEntity<long>
     public decimal? TargetPrice { get; set; }
     public decimal? StopLossPrice { get; set; }
     public decimal? FilledPrice { get; set; }
-
     public DateTime? FilledAt { get; set; }
+
+    // T+1 Session Identity and Execution Audit Fields
+    public long? SourceSignalId { get; set; }
+    public DateOnly? SignalSessionDate { get; set; }
+    public DateOnly? TargetExecutionSessionDate { get; set; }
+    public DateOnly? ExecutedSessionDate { get; set; }
+    public string? CancellationReason { get; set; }
 }
 
 public class PaperTrade : BaseEntity<long>

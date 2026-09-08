@@ -49,7 +49,8 @@ public class BistDailyBulletinIntegrationTests
         var holidayCalendar = new ConfigurableHolidayCalendar(configuration);
         var calendar = new BistMarketSessionCalendar(configuration, holidayCalendar);
         var parser = new BistDailyBulletinParser();
-        var corporateActions = new CorporateActionAdjustmentService(context, NullLogger<CorporateActionAdjustmentService>.Instance);
+        var corporateActions = new CorporateActionAdjustmentService(context, configuration, NullLogger<CorporateActionAdjustmentService>.Instance);
+        var sessionDateResolver = new MarketSessionDateResolver();
 
         var httpClient = new HttpClient();
         var provider = new BistDailyBulletinMarketDataProvider(
@@ -59,7 +60,8 @@ public class BistDailyBulletinIntegrationTests
             NullLogger<BistDailyBulletinMarketDataProvider>.Instance,
             parser,
             corporateActions,
-            calendar
+            calendar,
+            sessionDateResolver
         );
 
         return (context, provider, calendar, corporateActions);
@@ -95,8 +97,8 @@ public class BistDailyBulletinIntegrationTests
         var symbols = await context.Symbols.OrderBy(s => s.Ticker).ToListAsync();
         Assert.Equal(3, symbols.Count);
         Assert.Equal("ASELS", symbols[0].Ticker);
-        Assert.Equal("SUSPD", symbols[1].Ticker);
-        Assert.False(symbols[1].IsActive); // Suspended is marked inactive
+        Assert.True(symbols[1].IsActive); // 1-day suspension keeps symbol active intact
+        Assert.Equal(sessionDate, symbols[1].LastSeenInBulletinDate);
         Assert.Equal("THYAO", symbols[2].Ticker);
         Assert.True(symbols[2].IsActive);
 
@@ -255,6 +257,75 @@ public class BistDailyBulletinIntegrationTests
         var trades = await context.PaperTrades.Where(t => t.PortfolioId == portfolio.Id).ToListAsync();
         Assert.Single(trades);
         Assert.Equal(322.0m, trades[0].Price);
+    }
+
+    [Fact]
+    public async Task OfficialSampleBulletin_20260907_IngestsAccurately_AndVerifiesAselsAndThyao()
+    {
+        var (context, provider, _, _) = CreateTestEnvironment();
+        var sessionDate = new DateOnly(2026, 9, 7);
+
+        // Find scratch/thb202609071.zip
+        string? zipPath = null;
+        var dir = AppContext.BaseDirectory;
+        for (int i = 0; i < 10; i++)
+        {
+            var candidate = Path.Combine(dir, "scratch", "thb202609071.zip");
+            if (File.Exists(candidate))
+            {
+                zipPath = candidate;
+                break;
+            }
+            var parent = Directory.GetParent(dir);
+            if (parent == null) break;
+            dir = parent.FullName;
+        }
+
+        if (zipPath == null)
+        {
+            var direct = Path.Combine("/home/test/Desktop/Finance", "scratch", "thb202609071.zip");
+            if (File.Exists(direct)) zipPath = direct;
+        }
+
+        Assert.NotNull(zipPath);
+        Assert.True(File.Exists(zipPath));
+
+        using var fileStream = File.OpenRead(zipPath);
+        var import = await provider.ImportBulletinStreamAsync(sessionDate, "thb202609071.zip", fileStream);
+
+        Assert.Equal(MarketDataImportStatus.Success, import.Status);
+        Assert.True(import.RowsAccepted > 500, $"Expected >500 rows accepted, got {import.RowsAccepted}");
+        Assert.True(import.PriceBarsInserted > 500, $"Expected >500 bars inserted, got {import.PriceBarsInserted}");
+
+        // Verify ASELS
+        var asels = await context.Symbols.FirstOrDefaultAsync(s => s.Ticker == "ASELS");
+        Assert.NotNull(asels);
+        Assert.True(asels.IsActive);
+        Assert.Equal(sessionDate, asels.LastSeenInBulletinDate);
+
+        var aselsBar = await context.PriceBars.FirstOrDefaultAsync(b => b.SymbolId == asels.Id && b.Timestamp == sessionDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+        Assert.NotNull(aselsBar);
+        Assert.Equal(390.25m, aselsBar.Open);
+        Assert.Equal(398.75m, aselsBar.High);
+        Assert.Equal(390.25m, aselsBar.Low);
+        Assert.Equal(392.5m, aselsBar.Close);
+        Assert.Equal(28176860m, aselsBar.Volume);
+        Assert.Equal(sessionDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), aselsBar.Timestamp);
+
+        // Verify THYAO
+        var thyao = await context.Symbols.FirstOrDefaultAsync(s => s.Ticker == "THYAO");
+        Assert.NotNull(thyao);
+        Assert.True(thyao.IsActive);
+        Assert.Equal(sessionDate, thyao.LastSeenInBulletinDate);
+
+        var thyaoBar = await context.PriceBars.FirstOrDefaultAsync(b => b.SymbolId == thyao.Id && b.Timestamp == sessionDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+        Assert.NotNull(thyaoBar);
+        Assert.Equal(295.0m, thyaoBar.Open);
+        Assert.Equal(297.25m, thyaoBar.High);
+        Assert.Equal(292.25m, thyaoBar.Low);
+        Assert.Equal(296.75m, thyaoBar.Close);
+        Assert.Equal(37949058m, thyaoBar.Volume);
+        Assert.Equal(sessionDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), thyaoBar.Timestamp);
     }
 
     private class DummySignalEngine : ISignalEngine

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -56,21 +56,27 @@ namespace BistQuant.Infrastructure.Migrations.Sqlite
                 table: "WorkerHeartbeats",
                 columns: new[] { "Timeframe", "CompletedAt" });
 
-            migrationBuilder.AddForeignKey(
-                name: "FK_Strategies_Users_UserId",
-                table: "Strategies",
-                column: "UserId",
-                principalTable: "Users",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.SetNull);
+            if (migrationBuilder.ActiveProvider != "Microsoft.EntityFrameworkCore.Sqlite")
+            {
+                migrationBuilder.AddForeignKey(
+                    name: "FK_Strategies_Users_UserId",
+                    table: "Strategies",
+                    column: "UserId",
+                    principalTable: "Users",
+                    principalColumn: "Id",
+                    onDelete: ReferentialAction.SetNull);
+            }
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropForeignKey(
-                name: "FK_Strategies_Users_UserId",
-                table: "Strategies");
+            if (migrationBuilder.ActiveProvider != "Microsoft.EntityFrameworkCore.Sqlite")
+            {
+                migrationBuilder.DropForeignKey(
+                    name: "FK_Strategies_Users_UserId",
+                    table: "Strategies");
+            }
 
             migrationBuilder.DropTable(
                 name: "WorkerHeartbeats");

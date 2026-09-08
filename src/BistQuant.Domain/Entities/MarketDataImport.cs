@@ -22,4 +22,18 @@ public class MarketDataImport : BaseEntity<long>
 
     public string SchemaVersion { get; set; } = "1.14";
     public string? ErrorMessage { get; set; }
+
+    // Revision audit fields
+    public int RevisionNumber { get; set; } = 1;
+    public bool IsRevision { get; set; }
+    public long? SupersedesImportId { get; set; }
+    public MarketDataImport? SupersedesImport { get; set; }
+    public bool IsCurrent { get; set; } = true;
+
+    // Fetch and attempt metadata
+    public DateTime? LastAttemptAt { get; set; }
+    public DateTime? NextAttemptAt { get; set; }
+    public int AttemptCount { get; set; }
+    public int? LastHttpStatus { get; set; }
+    public BulletinDownloadStatus? DownloadStatus { get; set; }
 }

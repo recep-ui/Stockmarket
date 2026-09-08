@@ -31,6 +31,7 @@ public class Signal : BaseEntity<long>
 
     public DateTime? ExpiresAt { get; set; }
     public DateOnly? SourceSessionDate { get; set; }
+    public bool IsSuperseded { get; set; }
 
     public ICollection<SignalReason> Reasons { get; set; } = new List<SignalReason>();
 }

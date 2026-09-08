@@ -23,6 +23,7 @@ public class Symbol : BaseEntity<int>
     public string Sector { get; set; } = string.Empty; // e.g. "Transportation"
     public string Industry { get; set; } = string.Empty;
     public bool IsActive { get; set; } = true;
+    public DateOnly? LastSeenInBulletinDate { get; set; }
 
     public ICollection<PriceBar> PriceBars { get; set; } = new List<PriceBar>();
     public ICollection<IndicatorSnapshot> IndicatorSnapshots { get; set; } = new List<IndicatorSnapshot>();
