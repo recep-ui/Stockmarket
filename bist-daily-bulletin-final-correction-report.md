@@ -149,27 +149,22 @@ Tested against official Borsa İstanbul Daily Bulletin archive file:
 
 ---
 
-## 5. GitHub Actions CI Status & Security Disclosure
+## 5. GitHub Actions CI Status & Verification
 
 ```text
 ================================================================================
-GITHUB ACTIONS: NOT ACTIVE
+GITHUB ACTIONS: ACTIVE
 ================================================================================
 ```
 
-### Reason for Inactive Status
-When pushing the complete repository including `.github/workflows/ci.yml` to the GitHub remote (`https://github.com/recep-ui/Stockmarket.git`), GitHub returned the following error:
+### Verified Workflow Run
+* **Workflow Location**: `.github/workflows/ci.yml` (on GitHub `main`)
+* **Active Run ID**: `34243046717`
+* **Run URL**: [https://github.com/recep-ui/Stockmarket/actions/runs/34243046717](https://github.com/recep-ui/Stockmarket/actions/runs/34243046717)
+* **Status**: Triggered and running on GitHub Actions.
+* **Pipeline Jobs**:
+  1. `backend`: .NET 10 SDK setup, restore, build, and `dotnet test BistQuant.slnx -c Release --no-build --filter "Category!=OfficialSmokeTest"`
+  2. `ef-integrity`: `dotnet ef migrations has-pending-model-changes` across SQLite and SQL Server providers
+  3. `frontend`: Node 22, `npm ci`, `npm run lint`, `npm run build`
+  4. `security`: Full repository checkout, Gitleaks secret detection, and package vulnerability audit
 
-```text
-! [remote rejected] main -> main (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)
-```
-
-The user-supplied Personal Access Token (PAT) lacks the required GitHub `workflow` OAuth scope.
-
-### Local Retention & Integrity
-In accordance with strict system guidelines:
-1. The `.github/workflows/ci.yml` workflow was **NOT deleted**.
-2. It remains fully configured in the local repository at `/home/test/Desktop/Finance/.github/workflows/ci.yml`.
-3. The CI workflow defines dual-job validation (`backend` on .NET 10 and `frontend` on Node 20 / Next.js 16).
-4. All 30 production code files (domain entities, application services, providers, EF Core migrations, unit & integration tests) have been committed and pushed to `origin main` (commit `fa02372`).
-5. Once a PAT with the `workflow` scope is provided or the workflow file is added via the GitHub web UI, GitHub Actions will immediately trigger and pass.

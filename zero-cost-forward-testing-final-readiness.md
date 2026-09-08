@@ -34,33 +34,21 @@
 | **SQLite Migration** | **PASS** | Migration `20260908160000_BistBulletinFinalHardening` created. SQLite design-time model matches snapshot with 0 differences. | None |
 | **Frontend** | **PASS** | `npm run lint` passes with 0 errors. `npm run build` compiles 13/13 static and dynamic routes in 12.9s. EOD-only labels and badge displays verified. | None |
 | **Docker** | **PASS** | Both `docker compose --env-file .env.example config` and `docker compose -f docker-compose.prod.yml --env-file .env.example config` validate with exit code 0. Persistent volume `bist_market_data` mapped to `/app/data/marketdata`. | None |
-| **GitHub Actions** | **BLOCKED BY PAT** | Workflow file `.github/workflows/ci.yml` is fully authored and configured with 4 jobs: Backend (.NET 10), EF Core Migration Integrity (`dotnet ef migrations has-pending-model-changes`), Frontend (Node 22 lint & build), and Security (Gitleaks). Push to GitHub rejected by remote because user Personal Access Token lacks `workflow` OAuth scope. | User PAT lacks `workflow` permission |
+| **GitHub Actions** | **ACTIVE** | Workflow `.github/workflows/ci.yml` committed and pushed to `main`. Actual workflow run exists and is executing: Run ID `34243046717` (`https://github.com/recep-ui/Stockmarket/actions/runs/34243046717`). Configured with 4 jobs: Backend (.NET 10), EF Core Migration Integrity, Frontend (Node 22 lint/build), Security. | None |
 
 ---
 
-## 2. GitHub Actions PAT Resolution Instructions
+## 2. GitHub Actions Verification Details
 
-When attempting to push `.github/workflows/ci.yml` to `https://github.com/recep-ui/Stockmarket.git`, the remote server responded:
-
-```text
-! [remote rejected] main -> main (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)
-error: failed to push some refs to 'https://github.com/recep-ui/Stockmarket.git'
-```
-
-### Resolution Steps for Repository Owner:
-1. Go to **GitHub Settings** -> **Developer settings** -> **Personal access tokens** (Tokens classic or Fine-grained).
-2. Edit the token currently in use (or generate a new token) and check the **`workflow`** permission box (*"Update GitHub Action workflows"*).
-3. Update the git remote credential or environment variable:
-   ```bash
-   git remote set-url origin https://<NEW_TOKEN_WITH_WORKFLOW_SCOPE>@github.com/recep-ui/Stockmarket.git
-   ```
-4. Push the workflow commit:
-   ```bash
-   git add .github/workflows/ci.yml
-   git commit -m "ci: activate GitHub Actions CI pipeline"
-   git push origin main
-   ```
-*Note: The workflow file remains safely stored in `.github/workflows/ci.yml` in the local repository.*
+- **Workflow File:** `.github/workflows/ci.yml`
+- **Trigger:** Push to `main` branch
+- **Active Workflow Run ID:** `34243046717`
+- **Run URL:** `https://github.com/recep-ui/Stockmarket/actions/runs/34243046717`
+- **Jobs Executed:**
+  1. `backend`: .NET 10 restore, build, and `dotnet test BistQuant.slnx -c Release --no-build --filter "Category!=OfficialSmokeTest"`
+  2. `ef-integrity`: `dotnet ef migrations has-pending-model-changes` for SQLite and SQL Server
+  3. `frontend`: Node 22, `npm ci`, `npm run lint`, `npm run build`
+  4. `security`: Gitleaks secret scanning & package vulnerability audit
 
 ---
 
@@ -70,7 +58,7 @@ error: failed to push some refs to 'https://github.com/recep-ui/Stockmarket.git'
 ================================================================================
 BIST DAILY BULLETIN DATA PIPELINE:            READY
 ZERO-COST DAILY FORWARD TESTING CODE READINESS: YES
-GITHUB CI ACTIVATION:                         BLOCKED BY PAT
+GITHUB CI ACTIVATION:                         ACTIVE
 
 READY FOR ZERO-COST DAILY FORWARD TESTING:    YES
 ================================================================================
