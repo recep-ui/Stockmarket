@@ -67,7 +67,7 @@ export default function DashboardPage() {
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-sky-500"></span>
               </span>
               <span className="text-xs font-bold uppercase tracking-wider text-sky-400">
-                Kantitatif Tarama Terminali • Veritabanı Modu
+                Kantitatif Tarama Terminali • Borsa İstanbul Resmi Günlük Bülten (EOD)
               </span>
               <span className="text-slate-600">|</span>
               <span className="text-xs text-slate-400">BIST 30 & 100 Evreni</span>

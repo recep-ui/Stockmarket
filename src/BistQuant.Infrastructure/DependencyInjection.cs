@@ -68,7 +68,17 @@ public static class DependencyInjection
         services.AddSingleton<ICacheService, CacheService>();
 
         // Market Data Services
-        services.AddScoped<Application.Interfaces.IMarketDataProvider, Providers.MarketData.MockMarketDataProvider>();
+        services.AddHttpClient<IBistDailyBulletinMarketDataProvider, Providers.MarketData.BistDailyBulletinMarketDataProvider>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(30);
+            client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            client.DefaultRequestHeaders.Add("Accept", "text/csv,application/zip,text/plain,*/*");
+        });
+
+        // Register active IMarketDataProvider as the official BIST Daily Bulletin provider
+        services.AddScoped<Application.Interfaces.IMarketDataProvider>(sp => sp.GetRequiredService<IBistDailyBulletinMarketDataProvider>());
+        services.AddScoped<Providers.MarketData.MockMarketDataProvider>();
+        services.AddScoped<IBistBulletinBackfillService, Services.MarketData.BistBulletinBackfillService>();
         services.AddScoped<Providers.MarketData.ICsvMarketDataService, Providers.MarketData.CsvMarketDataService>();
 
         // Notification Providers

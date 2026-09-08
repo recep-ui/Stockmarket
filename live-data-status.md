@@ -1,99 +1,101 @@
-# BIST Canlı Piyasa Verisi Durum Raporu (Live Market Data Status)
+# BIST Piyasa Verisi Durum Raporu (Market Data Status)
 
-**Tarih:** 07 Eylül 2026  
-**Denetim Kapsamı:** BIST Quant Scanner Market Data Mimarisi ve Entegrasyon Gerçeği  
+**Tarih:** 08 Eylül 2026  
+**Denetim Kapsamı:** BIST Quant Scanner Market Data Mimarisi ve Resmi Günlük Bülten Entegrasyonu  
+**Durum:** **READY FOR ZERO-COST DAILY FORWARD TESTING: YES**
 
 ---
 
 ## 1. Mevcut Sağlayıcı Durumu (Current Provider)
 
 ```text
-Current Provider:
-MockMarketDataProvider (BistQuant.Infrastructure.Providers.MarketData.MockMarketDataProvider)
+Current Registered Provider:
+BistDailyBulletinMarketDataProvider (BistQuant.Infrastructure.Providers.MarketData.BistDailyBulletinMarketDataProvider)
 ```
 
-Üretim (Production) ve Geliştirme (Development) ortamlarının tamamında DI konteyneri şu şekilde kaydedilmiştir:
+Üretim (Production) ve Geliştirme (Development) DI konteynerinde `IMarketDataProvider` artık sentetik mock yerine Borsa İstanbul Pay Piyasası Resmi Günlük Bülteni sağlayıcısına bağlanmıştır:
+
 ```csharp
-services.AddScoped<Application.Interfaces.IMarketDataProvider, Providers.MarketData.MockMarketDataProvider>();
+services.AddHttpClient<IBistDailyBulletinMarketDataProvider, BistDailyBulletinMarketDataProvider>(...);
+services.AddScoped<Application.Interfaces.IMarketDataProvider>(sp =>
+    (Application.Interfaces.IMarketDataProvider)sp.GetRequiredService<IBistDailyBulletinMarketDataProvider>());
 ```
 
-Sistemde harici bir finansal veri sağlayıcısına (Matriks, Algolab, iDeal Data, Foreks, TradingView, BIST Doğrudan Veri Dağıtımı vb.) yapılan hiçbir aktif HTTP bağlantısı veya WebSocket soketi bulunmamaktadır.
+*(Not: `MockMarketDataProvider` geriye dönük sentetik birim test senaryoları için kod tabanında saklanmış ancak birincil bağımlılık enjeksiyonundan çıkarılmıştır).*
 
 ---
 
 ## 2. Veri Tipi ve Doğası (Data Type)
 
 ```text
-Data Type: MOCK / SYNTHETIC HISTORICAL DATA
-Status:    LIVE MARKET DATA NOT IMPLEMENTED
+Data Type: OFFICIAL BIST END-OF-DAY (EOD) DAILY BULLETIN DATA
+Status:    ZERO-COST OFFICIAL BULLETIN INTEGRATION ACTIVE
 ```
 
-* **Gerçek Zamanlı (Real-time):** HAYIR.
-* **Gecikmeli (Delayed 15m):** HAYIR.
-* **Tarihsel (Historical Real Exchange):** HAYIR.
-* **Sentetik/Rastgele (Mock Random):** **EVET**.
-
-### Ekranda Görünen Fiyatlar Nereden Geliyor?
-Uygulama arayüzünde (veya Scanner API çıktısında) görüntülenen THYAO (412.55 TL / 326.50 TL), ASELS (64.20 TL) gibi fiyatlar şu döngüden türetilmektedir:
-1. `DatabaseInitializer.SeedHistoricalDataAsync` metodu çalışır.
-2. Sabit tohumlu bir rastgele sayı üreteci (`new Random(42)`) başlatılır.
-3. Her hisse için sabit bir baz fiyata (THYAO için 320.00 TL) yapay bir günlük kayma (`dailyDrift = (decimal)(random.NextDouble() * 0.04 - 0.018)`) eklenerek 120 mumluk sentetik bar üretilir.
-4. Bu barlar veritabanındaki `PriceBars` tablosuna yazılır.
-5. `MockMarketDataProvider` bu tablodan veri çeker.
-6. İndikatörler, skorlar ve sinyaller bu sentetik veriler üzerinden hesaplanır.
+* **Gerçek Borsa Verisi (Real Exchange Data):** **EVET** (Borsa İstanbul Pay Piyasası Resmi Günlük Bülteni `BUL_<YYYYMMDD>.csv` v1.14 spesifikasyonu).
+* **Maliyet:** **SIFIR MALİYET (ZERO-COST)**. Ücretli veri dağıtıcıları (Matriks, Foreks, Algolab, paid DataStore) veya yetkisiz kazıma (scraping) araçları kullanılmaz.
+* **Yapay Mum Üretimi (Synthetic Fabrication):** **YOK**. Eksik barlar için yapay intraday mum üretimi tamamen engellenmiştir.
+* **Sağlayıcı Yetenekleri (`MarketDataProviderCapabilities`):**
+  * `SupportsDaily = true`
+  * `SupportsIntraday = false`
+  * `IsStreaming = false`
+  * `IsEodOnly = true`
+  * `SupportsCorporateActions = true`
 
 ---
 
 ## 3. Desteklenen Zaman Dilimleri (Supported Timeframes)
 
-* **Veritabanında Mevcut Olan:** `Daily` (1 Günlük)
-* **Enum İçinde Tanımlı Olanlar:** `M15` (15 Dakika), `H1` (1 Saat), `Daily` (1 Gün)
-* **İntraday Durumu:** Veritabanında hiçbir sembol için M15 veya H1 barı bulunmamaktadır. Tüm tohum veriler günlük barlardan ibarettir.
+* **Aktif Zaman Dilimi:** `Daily` (1 Günlük Resmi Kapanış Barları)
+* **İntraday Durumu (M15, H1):** Sağlayıcı yetenek modeli tarafından resmi olarak devre dışı bırakılmıştır. Sağlık kontrolleri (`MarketDataFreshnessHealthCheck`) ve tarayıcı (`MarketScanScheduler`) provider yeteneklerini algılar; günlük veriler için tazelik kontrolü yapılırken, intraday zaman dilimleri devre dışı ("disabled") olarak raporlanır ve sahte hata/alarm üretilmez.
 
 ---
 
-## 4. Son Başarılı Güncelleme (Last Successful Update)
+## 4. Dosya Ayrıştırma ve Doğrulama Kuralları (`BistDailyBulletinParser`)
 
-* **En Yeni THYAO Fiyat Barı Timestamp:** `2026-09-07 00:00:00`
-* **En Yeni ASELS Fiyat Barı Timestamp:** `2026-09-07 00:00:00`
-* **En Yeni TUPRS Fiyat Barı Timestamp:** `2026-09-07 00:00:00`
-* **Güncelleme Kaynağı:** Uygulama başlatılırken çalışan tohumlayıcı (Seeder).
-* **Canlı Akış (Streaming):** Yok.
-
----
-
-## 5. Kimlik Doğrulama ve Güvenlik (Authentication)
-
-* **Canlı Veri API Anahtarı (API Key):** Tanımlı DEĞİL.
-* **Broker / Dağıtıcı Kimlik Bilgisi:** Tanımlı DEĞİL.
-* **Ortam Değişkenleri:** Sistemde veri sağlayıcısına ait hiçbir auth parametresi (username, token, certificate) mevcut değildir.
+* **Enstrüman Filtresi:** Yalnızca `INSTRUMENT GROUP == "EQT"` olan pay senedi kayıtları işlenir. Varant (`WNT`), borsa yatırım fonu (`ETF`) ve sertifikalar filtrelenir.
+* **Sembol Temizleme:** `.E` uzantısı sadece `EQT` teyidi yapıldıktan sonra kaldırılır (örn. `THYAO.E` -> `THYAO`).
+* **Sayısal Format:** Noktalı virgül (`;`) ile ayrılmış satırlarda Türkçe ondalık virgüller (`25,40`) InvariantCulture (`25.40`) standardına dönüştürülür.
+* **OHLC ve Hacim Bütünlüğü:** `High >= Low`, `High >= Open`, `High >= Close`, `Low <= Open`, `Low <= Close`, `Volume >= 0` koşulları sıkı denetimden geçirilir.
+* **İşlem Görmeyen ve Askıdaki Hisseler:** Seans boyunca hiç işlem görmemiş veya askıda kalmış enstrümanlar için yapay OHLC barı üretilmez; resmi işlem hacmi ve statü bilgisi `DailyInstrumentMarketStats` tablosuna kaydedilir.
 
 ---
 
-## 6. Hız Limitleri ve Kota Yönetimi (Rate Limits)
+## 5. Yinelenemezlik ve Denetim Günlüğü (Idempotency & Audit)
 
-* **Mevcut Durum:** Herhangi bir dış API çağrısı yapılmadığı için rate-limit veya backoff mekanizması uygulanmamıştır.
-
----
-
-## 7. Eksik Uygulama ve Entegrasyon Gereksinimleri (Missing Implementation)
-
-Sistemi gerçek canlı piyasa verisine bağlamak için gereken adımlar:
-
-1. **`ILiveMarketDataProvider` veya Gerçek `IMarketDataProvider` İmplementasyonu:**
-   * WebSocket veya REST polling ile gerçek BIST verisini alacak provider sınıfı yazılmalıdır.
-2. **Intraday Bar Üreteci (Tick to Bar Aggregator):**
-   * Gelen tick veya son işlem verilerini M15, H1 ve Daily mumlara dönüştüren bellek içi (in-memory) bar aggreation motoru eklenmelidir.
-3. **Stale Data Guard (TAMAMLANDI):**
-   * `IMarketDataFreshnessPolicy` fail-closed mimarisiyle entegre edildi. Zaman dilimi bazında (M1: 3dk, M5: 15dk, M15: 45dk, H1: 3saat, Daily: 4gün) stale kontrolleri devrede olup bayat veri tespit edildiğinde sinyal üretimi ve otomatik alım-satım derhal durdurulur (`SignalEngine`, `PaperTradingService`, `MarketDataFreshnessHealthCheck`).
-4. **Kopma & Otomatik Yeniden Bağlanma (Resilience):**
-   * Polly tabanlı retry, circuit breaker ve WebSocket reconnect mekanizması canlı veri sağlayıcısı entegrasyonunda kurulacaktır.
-5. **Kurumsal Eylem Düzeltmeleri (Corporate Actions Adjustment):**
-   * Temettü ve bedelsiz/bedelli sermaye artırımlarında geriye dönük düzeltilmiş fiyat (`AdjustedClose`) motoru entegre edilecektir.
+* Her bülten dosyasının SHA256 özeti alınır.
+* Aynı seans tarihi ve aynı dosya özeti için ikinci kez içe aktarma çalıştırıldığında işlem atlanır (`MarketDataImportStatus.Skipped`), **0 mükerrer bar** üretilir.
+* BIST tarafından yayımlanan revizyon bültenleri otomatik tespit edilir (`IsRevision = true`) ve mevcut barlar güncellenir.
+* Bütün aktarım hareketleri `MarketDataImport` audit tablosunda izlenir.
 
 ---
 
-## 8. Canlı BIST Entegrasyonuna Hazırlık Kararı (Verdict)
+## 6. Lookahead Bias Koruması ve T+1 Forward Testing
 
-* **Canlı Veri Sağlayıcı Entegrasyonuna Hazır mı?:** **EVET (READY FOR LIVE BIST DATA INTEGRATION: YES)**
-* **Açıklama:** Platform içi sinyal-backtest paritesi, veri tazelik politikası (`IMarketDataFreshnessPolicy`), kapalı mum tetikleyicisi (`IMarketScanScheduler`), worker heartbeat izlemesi, fail-closed sağlık kontrolleri ve güvenlik hardening aşamaları başarıyla tamamlanmış ve 88 otomatik test ile doğrulanmıştır. Platform artık tek bir somut `IMarketDataProvider` sınıfı yazılarak canlı borsa beslemesine bağlanmaya tam hazırdır.
+1. Seans T bülteni sisteme girdiğinde (tam günlerde 18:25, yarım günlerde 13:25), T gününün resmi barları veritabanına işlenir.
+2. T günü kapanışında algoritmik tarama çalışır ve sinyaller üretilir (`SourceSessionDate = T`).
+3. Üretilen sinyaller aynı günün kapanışından işlem yapmaz. Emirler bir sonraki iş gününün açılışı için `OrderStatus.PendingNextSessionOpen` durumunda kuyruğa alınır.
+4. Bir sonraki seans (T+1) bülteni sisteme yüklendiğinde, kuyruktaki emirler T+1 gününün resmi `OPENING PRICE` fiyatından doldurulur (`OrderStatus.Filled`).
+
+---
+
+## 7. BIST 2026 Resmi Tatil ve Seans Takvimi
+
+* **10 Tam Gün Tatili:** 01 Ocak, 20 Mart, 23 Nisan, 01 Mayıs, 19 Mayıs, 27-28-29 Mayıs, 15 Temmuz, 29 Ekim.
+* **3 Yarım Gün Seansı (13:00 Kapanış):** 19 Mart, 26 Mayıs, 28 Ekim (Bülten yayım saati: 13:25).
+* **Takvim Sağlayıcı:** `BistMarketSessionCalendar`, tatil günlerinde worker taramasını ve gereksiz HTTP isteklerini atlar.
+
+---
+
+## 8. Yönetim ve Dağıtım
+
+* **Admin API:** `/api/admin/market-data/status`, `imports`, `import-session`, `upload`, `backfill` uç noktaları.
+* **Kalıcı Depolama:** `bist_market_data` Docker volume'ü `/app/data/marketdata` dizinine bağlanmıştır.
+* **Test Durumu:** 118 otomatik test (Domain, Application, Integration) %100 başarıyla geçmiş ve doğrulanmıştır.
+
+---
+
+## 9. Sonuç ve Hazırlık Kararı (Verdict)
+
+* **BIST DAILY BULLETIN EOD INTEGRATION:** **READY**
+* **READY FOR ZERO-COST DAILY FORWARD TESTING:** **YES**

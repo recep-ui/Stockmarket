@@ -17,6 +17,8 @@ public interface IPaperTradingService
 
     Task<PaperTradeDto> ExecuteOrderAsync(CreatePaperOrderRequest request, CancellationToken cancellationToken = default);
 
+    Task<int> ExecutePendingOrdersForSessionAsync(DateOnly sessionDate, CancellationToken cancellationToken = default);
+
     Task AutoTradeScanAsync(long portfolioId, CancellationToken cancellationToken = default);
 }
 
@@ -25,6 +27,7 @@ public class PaperTradingService : IPaperTradingService
     private readonly IApplicationDbContext _context;
     private readonly ISignalEngine _signalEngine;
     private readonly IMarketDataFreshnessPolicy _freshnessPolicy;
+    private readonly IMarketSessionCalendar? _sessionCalendar;
     private readonly ILogger<PaperTradingService> _logger;
 
     private const decimal CommissionRate = 0.0015m; // 0.15%
@@ -33,12 +36,14 @@ public class PaperTradingService : IPaperTradingService
         IApplicationDbContext context,
         ISignalEngine signalEngine,
         IMarketDataFreshnessPolicy freshnessPolicy,
-        ILogger<PaperTradingService> logger)
+        ILogger<PaperTradingService> logger,
+        IMarketSessionCalendar? sessionCalendar = null)
     {
         _context = context;
         _signalEngine = signalEngine;
         _freshnessPolicy = freshnessPolicy;
         _logger = logger;
+        _sessionCalendar = sessionCalendar;
     }
 
     public async Task<PaperPortfolioDto> GetOrCreateDefaultPortfolioAsync(long userId, CancellationToken cancellationToken = default)
@@ -419,24 +424,157 @@ public class PaperTradingService : IPaperTradingService
             // Deterministic ClientOrderId: AUTO-{PortfolioId}-{SignalId} to guarantee idempotency across scan cycles
             var clientOrderId = $"AUTO-{portfolio.Id}-{sig.Id}";
 
+            // Idempotency: check if pending or filled order already exists for this clientOrderId
+            var existingOrder = await _context.PaperOrders
+                .FirstOrDefaultAsync(o => o.PortfolioId == portfolio.Id && o.ClientOrderId == clientOrderId, cancellationToken);
+
+            if (existingOrder != null)
+            {
+                continue;
+            }
+
             try
             {
-                await ExecuteOrderAsync(new CreatePaperOrderRequest(
-                    portfolio.Id,
-                    sig.Symbol.Ticker,
-                    OrderSide.Buy,
-                    OrderType.Market,
-                    shares,
-                    ClientOrderId: clientOrderId
-                ), cancellationToken);
+                // In T+1 EOD forward testing, market orders are submitted for execution at the NEXT trading session's open.
+                var pendingOrder = new PaperOrder
+                {
+                    PortfolioId = portfolio.Id,
+                    SymbolId = sig.SymbolId,
+                    ClientOrderId = clientOrderId,
+                    Side = OrderSide.Buy,
+                    Type = OrderType.Market,
+                    Status = OrderStatus.PendingNextSessionOpen,
+                    Quantity = shares,
+                    TargetPrice = sig.TakeProfit1,
+                    StopLossPrice = sig.StopLoss
+                };
 
-                _logger.LogInformation("Auto Paper Trade BUY executed for {Ticker} ({Shares} shares at {Price:F2} TL, ClientOrderId: {ClientOrderId})",
-                    sig.Symbol.Ticker, shares, sig.Price, clientOrderId);
+                _context.PaperOrders.Add(pendingOrder);
+                await _context.SaveChangesAsync(cancellationToken);
+
+                _logger.LogInformation("Auto Paper Trade queued (PendingNextSessionOpen) for {Ticker} ({Shares} shares, ClientOrderId: {ClientOrderId})",
+                    sig.Symbol.Ticker, shares, clientOrderId);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Auto paper trade failed for {Ticker} (ClientOrderId: {ClientOrderId})", sig.Symbol.Ticker, clientOrderId);
+                _logger.LogWarning(ex, "Auto paper trade queueing failed for {Ticker} (ClientOrderId: {ClientOrderId})", sig.Symbol.Ticker, clientOrderId);
             }
         }
+    }
+
+    public async Task<int> ExecutePendingOrdersForSessionAsync(DateOnly sessionDate, CancellationToken cancellationToken = default)
+    {
+        var pendingOrders = await _context.PaperOrders
+            .Include(o => o.Portfolio)
+            .ThenInclude(p => p.Positions)
+            .Include(o => o.Symbol)
+            .Where(o => o.Status == OrderStatus.PendingNextSessionOpen)
+            .ToListAsync(cancellationToken);
+
+        if (!pendingOrders.Any()) return 0;
+
+        int filledCount = 0;
+        var barTimestampUtc = sessionDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        var marketOpenTime = _sessionCalendar?.GetMarketOpenTime(sessionDate) ?? new TimeSpan(10, 0, 0);
+        var fillTimestampUtc = sessionDate.ToDateTime(TimeOnly.FromTimeSpan(marketOpenTime), DateTimeKind.Utc);
+
+        foreach (var order in pendingOrders)
+        {
+            var bar = await _context.PriceBars
+                .AsNoTracking()
+                .FirstOrDefaultAsync(b => b.SymbolId == order.SymbolId && b.Timeframe == Timeframe.Daily && b.Timestamp == barTimestampUtc, cancellationToken);
+
+            var stats = await _context.DailyInstrumentMarketStats
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.SymbolId == order.SymbolId && s.SessionDate == sessionDate, cancellationToken);
+
+            if (stats?.Suspended == true || bar == null || bar.Open <= 0)
+            {
+                _logger.LogInformation("Order {OrderId} for {Ticker} cannot fill on {SessionDate}: suspended or no open price.", order.Id, order.Symbol.Ticker, sessionDate);
+                continue;
+            }
+
+            decimal fillPrice = bar.Open;
+            decimal totalCost = (order.Quantity * fillPrice) + Math.Round(order.Quantity * fillPrice * CommissionRate, 2);
+
+            if (order.Portfolio.CashBalance < totalCost)
+            {
+                _logger.LogWarning("Order {OrderId} cancelled due to insufficient cash balance (Required: {Cost}, Available: {Balance}).",
+                    order.Id, totalCost, order.Portfolio.CashBalance);
+                order.Status = OrderStatus.Cancelled;
+                continue;
+            }
+
+            // Deduct cash
+            order.Portfolio.CashBalance -= totalCost;
+
+            // Upsert position
+            var position = order.Portfolio.Positions.FirstOrDefault(p => p.SymbolId == order.SymbolId);
+            if (position == null)
+            {
+                position = new PaperPosition
+                {
+                    PortfolioId = order.PortfolioId,
+                    SymbolId = order.SymbolId,
+                    Quantity = order.Quantity,
+                    AveragePrice = fillPrice,
+                    CurrentPrice = bar.Close
+                };
+                _context.PaperPositions.Add(position);
+                order.Portfolio.Positions.Add(position);
+            }
+            else
+            {
+                var oldQty = position.Quantity;
+                var newQty = oldQty + order.Quantity;
+                position.AveragePrice = Math.Round(((oldQty * position.AveragePrice) + (order.Quantity * fillPrice)) / newQty, 4);
+                position.Quantity = newQty;
+                position.CurrentPrice = bar.Close;
+            }
+
+            // Create trade
+            var trade = new PaperTrade
+            {
+                PortfolioId = order.PortfolioId,
+                SymbolId = order.SymbolId,
+                PaperOrderId = order.Id,
+                Side = order.Side,
+                Quantity = order.Quantity,
+                Price = fillPrice,
+                RealizedPnL = 0,
+                Commission = Math.Round(order.Quantity * fillPrice * CommissionRate, 2),
+                ExecutedAt = fillTimestampUtc
+            };
+            _context.PaperTrades.Add(trade);
+
+            order.Status = OrderStatus.Filled;
+            order.FilledPrice = fillPrice;
+            order.FilledAt = fillTimestampUtc;
+            filledCount++;
+
+            _logger.LogInformation("Filled pending T+1 paper order {OrderId} for {Ticker} ({Shares} shares at official OPEN {Price} TL on session {SessionDate})",
+                order.Id, order.Symbol.Ticker, order.Quantity, fillPrice, sessionDate);
+        }
+
+        // Also update current prices for all open positions of active portfolios to session close
+        var activePositions = await _context.PaperPositions
+            .Include(p => p.Portfolio)
+            .Where(p => p.Quantity > 0)
+            .ToListAsync(cancellationToken);
+
+        foreach (var pos in activePositions)
+        {
+            var bar = await _context.PriceBars
+                .AsNoTracking()
+                .FirstOrDefaultAsync(b => b.SymbolId == pos.SymbolId && b.Timeframe == Timeframe.Daily && b.Timestamp == barTimestampUtc, cancellationToken);
+
+            if (bar != null && bar.Close > 0)
+            {
+                pos.CurrentPrice = bar.Close;
+            }
+        }
+
+        await _context.SaveChangesAsync(cancellationToken);
+        return filledCount;
     }
 }

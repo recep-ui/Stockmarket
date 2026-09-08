@@ -145,12 +145,17 @@ export default function ScannerPage() {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-black text-white tracking-tight flex items-center gap-2">
-            <Filter className="w-5 h-5 text-sky-400" />
-            BIST Hisse Filtreleme & Algoritmik Tarama
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-black text-white tracking-tight flex items-center gap-2">
+              <Filter className="w-5 h-5 text-sky-400" />
+              BIST Günlük Algoritmik Tarama
+            </h1>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              Resmi Günlük Bülten (EOD)
+            </span>
+          </div>
           <p className="text-xs text-slate-400 mt-0.5">
-            BIST 100 hisselerini kantitatif göstergeler, kırılımlar ve risk/getiri oranlarına göre anlık sıralayın.
+            Borsa İstanbul paylarını resmi bülten verileri, kantitatif göstergeler ve risk/getiri profillerine göre sıralayın.
           </p>
         </div>
 

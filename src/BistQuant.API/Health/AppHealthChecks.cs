@@ -1,4 +1,5 @@
 using BistQuant.Application.Common.Interfaces;
+using BistQuant.Application.Interfaces;
 using BistQuant.Domain.Enums;
 using BistQuant.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -39,17 +40,20 @@ public class MarketDataFreshnessHealthCheck : IHealthCheck
     private readonly IMarketDataFreshnessPolicy _freshnessPolicy;
     private readonly IMarketSessionCalendar _sessionCalendar;
     private readonly IConfiguration _configuration;
+    private readonly IMarketDataProvider? _marketDataProvider;
 
     public MarketDataFreshnessHealthCheck(
         BistQuantDbContext context,
         IMarketDataFreshnessPolicy freshnessPolicy,
         IMarketSessionCalendar sessionCalendar,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IMarketDataProvider? marketDataProvider = null)
     {
         _context = context;
         _freshnessPolicy = freshnessPolicy;
         _sessionCalendar = sessionCalendar;
         _configuration = configuration;
+        _marketDataProvider = marketDataProvider;
     }
 
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
@@ -68,8 +72,13 @@ public class MarketDataFreshnessHealthCheck : IHealthCheck
             }
 
             var nowUtc = DateTime.UtcNow;
-            var targetTimeframes = new[] { Timeframe.Daily, Timeframe.H1, Timeframe.M15 };
-            var timeframeData = new Dictionary<string, object>();
+            var targetTimeframes = _marketDataProvider != null
+                ? _marketDataProvider.Capabilities.SupportedTimeframes.ToArray()
+                : new[] { Timeframe.Daily, Timeframe.H1, Timeframe.M15 };
+            var timeframeData = new Dictionary<string, object>
+            {
+                ["Provider"] = _marketDataProvider?.Capabilities.ProviderName ?? "Default Provider"
+            };
 
             bool anyUnhealthy = false;
             bool anyDegraded = false;
@@ -222,16 +231,19 @@ public class WorkerScanHealthCheck : IHealthCheck
     private readonly BistQuantDbContext _context;
     private readonly IMarketSessionCalendar _sessionCalendar;
     private readonly IConfiguration _configuration;
+    private readonly IMarketDataProvider? _marketDataProvider;
     private static readonly DateTime AppStartTime = DateTime.UtcNow;
 
     public WorkerScanHealthCheck(
         BistQuantDbContext context,
         IMarketSessionCalendar sessionCalendar,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IMarketDataProvider? marketDataProvider = null)
     {
         _context = context;
         _sessionCalendar = sessionCalendar;
         _configuration = configuration;
+        _marketDataProvider = marketDataProvider;
     }
 
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
@@ -248,6 +260,16 @@ public class WorkerScanHealthCheck : IHealthCheck
 
             foreach (var tf in targetTimeframes)
             {
+                if (_marketDataProvider != null && !_marketDataProvider.Capabilities.SupportedTimeframes.Contains(tf))
+                {
+                    timeframeReports[tf.ToString()] = new Dictionary<string, object>
+                    {
+                        ["Status"] = "Disabled (Unsupported by Active Provider)",
+                        ["Provider"] = _marketDataProvider.Capabilities.ProviderName
+                    };
+                    continue;
+                }
+
                 bool isEnabled = tf switch
                 {
                     Timeframe.Daily => _configuration.GetValue<bool?>("ScannerSchedules:DailyEnabled") ?? true,

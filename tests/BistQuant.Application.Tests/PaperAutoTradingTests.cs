@@ -95,24 +95,49 @@ public class PaperAutoTradingTests
 
         var paperService = new PaperTradingService(context, mockSignalEngine.Object, freshnessPolicy, NullLogger<PaperTradingService>.Instance);
 
-        // Act 1: Initial auto trade scan
+        // Act 1: Initial auto trade scan (session T close) -> queues PendingNextSessionOpen order
         await paperService.AutoTradeScanAsync(portfolio.Id);
 
-        // Assert 1: Trade was executed and ClientOrderId matches AUTO-{portfolio.Id}-{signal.Id}
-        var trades = await context.PaperTrades.Where(t => t.PortfolioId == portfolio.Id).ToListAsync();
-        Assert.Single(trades);
-        Assert.Equal(200m, trades[0].Price);
-
+        // Assert 1: Order is created with PendingNextSessionOpen status and deterministic ClientOrderId
         var orders = await context.PaperOrders.Where(o => o.PortfolioId == portfolio.Id).ToListAsync();
         Assert.Single(orders);
+        Assert.Equal(OrderStatus.PendingNextSessionOpen, orders[0].Status);
         Assert.Equal($"AUTO-{portfolio.Id}-{signal.Id}", orders[0].ClientOrderId);
 
-        // Act 2: Run scan again (simulating repeated scanner cycle)
+        // Act 2: Run scan again (simulating repeated scanner cycle) -> Idempotency check
         await paperService.AutoTradeScanAsync(portfolio.Id);
 
-        // Assert 2: Still strictly 1 trade and 1 order (no duplicate buy!)
-        var tradesAfter = await context.PaperTrades.Where(t => t.PortfolioId == portfolio.Id).ToListAsync();
-        Assert.Single(tradesAfter);
+        // Assert 2: Still strictly 1 order (no duplicate pending order!)
+        var ordersAfter = await context.PaperOrders.Where(o => o.PortfolioId == portfolio.Id).ToListAsync();
+        Assert.Single(ordersAfter);
+
+        // Act 3: Next trading session T+1 arrives. New PriceBar with official OPEN price = 205m
+        var nextSessionDate = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(1));
+        var nextBar = new PriceBar
+        {
+            SymbolId = symbol.Id,
+            Timeframe = Timeframe.Daily,
+            Timestamp = nextSessionDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            Open = 205m,
+            High = 210m,
+            Low = 204m,
+            Close = 208m,
+            Volume = 1200000m
+        };
+        context.PriceBars.Add(nextBar);
+        await context.SaveChangesAsync();
+
+        int filled = await paperService.ExecutePendingOrdersForSessionAsync(nextSessionDate);
+
+        // Assert 3: Order filled at official OPEN price 205m
+        Assert.Equal(1, filled);
+        var trades = await context.PaperTrades.Where(t => t.PortfolioId == portfolio.Id).ToListAsync();
+        Assert.Single(trades);
+        Assert.Equal(205m, trades[0].Price);
+
+        var filledOrder = await context.PaperOrders.FirstAsync(o => o.Id == orders[0].Id);
+        Assert.Equal(OrderStatus.Filled, filledOrder.Status);
+        Assert.Equal(205m, filledOrder.FilledPrice);
     }
 
     [Fact]

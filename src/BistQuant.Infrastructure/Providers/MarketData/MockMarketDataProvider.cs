@@ -10,6 +10,15 @@ public class MockMarketDataProvider : IMarketDataProvider
 {
     private readonly IApplicationDbContext _context;
 
+    public MarketDataProviderCapabilities Capabilities => new(
+        ProviderName: "Mock / Database Provider",
+        SupportsRealtime: false,
+        SupportsEndOfWeekOrDay: true,
+        SupportedTimeframes: new[] { Timeframe.Daily, Timeframe.H1, Timeframe.M15 },
+        RequiresSessionClosure: false,
+        Description: "Mock and local database price bar provider for development and testing."
+    );
+
     public MockMarketDataProvider(IApplicationDbContext context)
     {
         _context = context;

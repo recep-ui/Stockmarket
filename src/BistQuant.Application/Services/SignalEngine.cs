@@ -188,6 +188,25 @@ public class SignalEngine : ISignalEngine
             return null;
         }
 
+        // Extract session date and check for existing signal to guarantee idempotency across scan runs
+        var sessionDate = DateOnly.FromDateTime(latestBar.Timestamp);
+        var existingSignal = await _context.Signals
+            .Include(s => s.Reasons)
+            .FirstOrDefaultAsync(s =>
+                s.SymbolId == symbolId &&
+                s.StrategyId == (strategy != null ? strategy.Id : null) &&
+                s.Timeframe == timeframe &&
+                s.SourceSessionDate == sessionDate,
+                cancellationToken);
+
+        if (existingSignal != null)
+        {
+            _logger.LogInformation(
+                "Signal for symbol {SymbolId}, strategy {StrategyId}, session {SessionDate} already exists. Returning existing signal (0 duplicates).",
+                symbolId, strategy?.Id, sessionDate);
+            return existingSignal;
+        }
+
         var risk = CalculateRiskParameters(latestBar.Close, snapshot);
         var expiresAt = CalculateExpiration(timeframe, DateTime.UtcNow);
 
@@ -196,6 +215,7 @@ public class SignalEngine : ISignalEngine
             SymbolId = symbolId,
             StrategyId = strategy?.Id,
             Timeframe = timeframe,
+            SourceSessionDate = sessionDate,
             SignalType = evalResult.SignalType,
             Score = evalResult.TotalScore,
             TrendScore = evalResult.TrendScore,
@@ -225,7 +245,7 @@ public class SignalEngine : ISignalEngine
         _context.Signals.Add(signal);
         await _context.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Generated {SignalType} signal for Symbol {SymbolId} with Score {Score} via unified pipeline.", evalResult.SignalType, symbolId, signal.Score);
+        _logger.LogInformation("Generated {SignalType} signal for Symbol {SymbolId} (Session {SessionDate}) with Score {Score} via unified pipeline.", evalResult.SignalType, symbolId, sessionDate, signal.Score);
 
         return signal;
     }

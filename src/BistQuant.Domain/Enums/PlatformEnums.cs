@@ -23,7 +23,27 @@ public enum OrderStatus : byte
     Pending = 1,
     Filled = 2,
     Cancelled = 3,
-    Rejected = 4
+    Rejected = 4,
+    PendingNextSessionOpen = 5,
+    Expired = 6
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum MarketDataImportStatus : byte
+{
+    Pending = 1,
+    Downloaded = 2,
+    Parsed = 3,
+    Imported = 4,
+    Success = 4,
+    AlreadyImported = 5,
+    NotPublishedYet = 6,
+    InvalidSourceContent = 7,
+    SchemaMismatch = 8,
+    Failed = 9,
+    BulletinRevisionDetected = 10,
+    Skipped = 11,
+    Processing = 12
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]

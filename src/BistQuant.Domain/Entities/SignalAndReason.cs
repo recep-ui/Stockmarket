@@ -30,6 +30,7 @@ public class Signal : BaseEntity<long>
     public decimal Confidence { get; set; } = 1.0m;
 
     public DateTime? ExpiresAt { get; set; }
+    public DateOnly? SourceSessionDate { get; set; }
 
     public ICollection<SignalReason> Reasons { get; set; } = new List<SignalReason>();
 }

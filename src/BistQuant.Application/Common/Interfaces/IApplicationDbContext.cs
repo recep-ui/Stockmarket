@@ -26,6 +26,8 @@ public interface IApplicationDbContext
     DbSet<AlertNotification> AlertNotifications { get; }
     DbSet<User> Users { get; }
     DbSet<WorkerHeartbeat> WorkerHeartbeats { get; }
+    DbSet<MarketDataImport> MarketDataImports { get; }
+    DbSet<DailyInstrumentMarketStats> DailyInstrumentMarketStats { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

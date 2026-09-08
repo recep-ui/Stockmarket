@@ -139,4 +139,87 @@ public class BistSessionCalendarTests
         Assert.Equal(now.AddDays(2), SignalEngine.CalculateExpiration(Timeframe.Daily, now));
         Assert.Equal(now.AddDays(7), SignalEngine.CalculateExpiration(Timeframe.Weekly, now));
     }
+
+    [Fact]
+    public void Bist2026Calendar_OfficialClosedHolidays_AllRecognized()
+    {
+        var holidays = new ConfigurableHolidayCalendar();
+        var calendar = new BistMarketSessionCalendar(null, holidays);
+
+        // 10 Full Closed Weekdays in 2026
+        var closedDates = new[]
+        {
+            new DateOnly(2026, 1, 1),   // Yılbaşı
+            new DateOnly(2026, 3, 20),  // Ramazan Bayramı 1. Gün
+            new DateOnly(2026, 4, 23),  // Ulusal Egemenlik ve Çocuk Bayramı
+            new DateOnly(2026, 5, 1),   // Emek ve Dayanışma Günü
+            new DateOnly(2026, 5, 19),  // Atatürk'ü Anma, Gençlik ve Spor Bayramı
+            new DateOnly(2026, 5, 27),  // Kurban Bayramı 1. Gün
+            new DateOnly(2026, 5, 28),  // Kurban Bayramı 2. Gün
+            new DateOnly(2026, 5, 29),  // Kurban Bayramı 3. Gün
+            new DateOnly(2026, 7, 15),  // 15 Temmuz Demokrasi ve Milli Birlik Günü
+            new DateOnly(2026, 10, 29)  // Cumhuriyet Bayramı
+        };
+
+        foreach (var date in closedDates)
+        {
+            Assert.True(holidays.IsHoliday(date), $"{date} must be recognized as holiday.");
+            Assert.False(calendar.IsTradingDay(date), $"{date} must not be a trading day.");
+        }
+    }
+
+    [Fact]
+    public void Bist2026Calendar_OfficialHalfDays_ClosesAt1300AndPublishesAt1325()
+    {
+        var holidays = new ConfigurableHolidayCalendar();
+        var calendar = new BistMarketSessionCalendar(null, holidays);
+
+        // 3 Half-Days in 2026
+        var halfDays = new[]
+        {
+            new DateOnly(2026, 3, 19),  // Ramazan Bayramı Arefesi
+            new DateOnly(2026, 5, 26),  // Kurban Bayramı Arefesi
+            new DateOnly(2026, 10, 28)  // Cumhuriyet Bayramı Arefesi
+        };
+
+        foreach (var date in halfDays)
+        {
+            Assert.True(calendar.IsTradingDay(date), $"{date} is a trading day (half-day).");
+            Assert.True(calendar.IsHalfDay(date), $"{date} must be recognized as half-day.");
+            Assert.Equal(new TimeSpan(10, 0, 0), calendar.GetMarketOpenTime(date));
+            Assert.Equal(new TimeSpan(13, 0, 0), calendar.GetMarketCloseTime(date));
+
+            var sessionInfo = calendar.GetSessionInfo(date);
+            Assert.True(sessionInfo.IsHalfDay);
+            Assert.Equal(new TimeSpan(13, 0, 0), sessionInfo.CloseTime);
+
+            // Bulletin publication window opens at 13:25 Istanbul = 10:25 UTC
+            var pubUtc = calendar.GetBulletinPublicationTimeUtc(date);
+            var expectedUtc = date.ToDateTime(new TimeOnly(10, 25, 0), DateTimeKind.Utc);
+            Assert.Equal(expectedUtc, pubUtc);
+        }
+    }
+
+    [Fact]
+    public void Bist2026Calendar_NextAndPreviousTradingDay_NavigatesAcrossHolidays()
+    {
+        var holidays = new ConfigurableHolidayCalendar();
+        var calendar = new BistMarketSessionCalendar(null, holidays);
+
+        // Before Kurban Bayramı:
+        // 2026-05-26 is Tuesday (half-day trading)
+        // 2026-05-27 Wednesday (closed holiday)
+        // 2026-05-28 Thursday (closed holiday)
+        // 2026-05-29 Friday (closed holiday)
+        // 2026-05-30 Saturday (weekend)
+        // 2026-05-31 Sunday (weekend)
+        // Next trading day after 2026-05-26 must be Monday 2026-06-01!
+        var halfDay = new DateOnly(2026, 5, 26);
+        var nextTrading = calendar.GetNextTradingDay(halfDay);
+        Assert.Equal(new DateOnly(2026, 6, 1), nextTrading);
+
+        // Previous trading day before Monday 2026-06-01 must be Tuesday 2026-05-26!
+        var prevTrading = calendar.GetPreviousTradingDay(new DateOnly(2026, 6, 1));
+        Assert.Equal(halfDay, prevTrading);
+    }
 }

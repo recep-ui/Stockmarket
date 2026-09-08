@@ -341,3 +341,43 @@ This document tracks every granular development step required to implement the c
   - Zero vulnerable packages, valid docker compose configs
   - `final-correction-report.md` generated with verdict: `READY FOR LIVE BIST DATA INTEGRATION: YES`
 
+---
+
+## Phase 13: BIST Daily Bulletin EOD Integration & Zero-Cost Market Data
+- [x] Zero-Cost Official Market Data Strategy:
+  - Replaced `MockMarketDataProvider` with `BistDailyBulletinMarketDataProvider` as the primary registered provider
+  - Provider capabilities: Daily only, EOD only, intraday M15/H1 disabled without synthetic fabrication
+  - Zero-cost architecture using Borsa İstanbul Pay Piyasası Günlük Bülten (`BUL_<YYYYMMDD>.csv`)
+- [x] Official BIST 2026 Calendar & Session Abstraction:
+  - Official 2026 holiday calendar with 10 closed weekdays and 3 half-days (2026-03-19, 2026-05-26, 2026-10-28)
+  - Date-specific session calendar (`IMarketSessionCalendar`, `BistMarketSessionCalendar`, `ConfigurableHolidayCalendar`)
+  - Session publication timing: 18:25 for full days, 13:25 for half-days
+- [x] Official v1.14 Semicolon CSV Parser (`BistDailyBulletinParser`):
+  - UTF-8 BOM, semicolon delimiter, InvariantCulture numeric parsing
+  - Strict equity filtering: `INSTRUMENT GROUP == EQT` validation, `.E` suffix stripped only after confirmation
+  - Strict OHLC validation (`High >= Low`, `Volume >= 0`)
+  - Suspended stocks & zero-trade handling without artificial OHLC fabrication
+- [x] Storage, Idempotency & Audit Logging:
+  - Local caching in `/app/data/marketdata` (Docker volume `bist_market_data`)
+  - SHA256 hashing with idempotency (0 duplicate bars on re-run)
+  - Revision bulletin detection (`IsRevision = true`)
+  - Audit entities: `MarketDataImport` and `DailyInstrumentMarketStats`
+- [x] T+1 Paper Trading Forward Testing:
+  - Evaluates at session T close, tags signals with `SourceSessionDate = T`
+  - Queues orders with `OrderStatus.PendingNextSessionOpen`
+  - Executes at session T+1 `OPENING PRICE` upon ingestion of next bulletin
+- [x] Worker Scheduler & Timeframe-Aware Health Checks:
+  - Worker scheduler aware of provider capabilities (waits for EOD publication time)
+  - Health checks aware of provider capabilities (Daily required, M15/H1 reported disabled without health failures)
+- [x] Admin API & Backfill:
+  - `/api/admin/market-data/status`, `imports`, `import-session`, `upload`, `backfill`
+  - Zip slip and file size protections on upload
+- [x] Dual-Database Migrations:
+  - SQLite: `20260908150000_BistDailyBulletinIntegration`
+  - SQL Server: `20260908150001_BistDailyBulletinIntegration`
+- [x] Test Suite & Verification:
+  - 118/118 tests passing (3 Domain, 67 Application, 48 Integration)
+  - Frontend Next.js Turbopack build 13/13 routes compiled with 0 errors
+  - Active GitHub Actions CI workflow in `.github/workflows/ci.yml` and `ci/ci.yml`
+
+

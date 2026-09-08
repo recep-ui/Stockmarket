@@ -106,7 +106,69 @@ public class Worker : BackgroundService
 
         try
         {
+            if (timeframe == Timeframe.Daily)
+            {
+                var bulletinProvider = scope.ServiceProvider.GetService<IBistDailyBulletinMarketDataProvider>();
+                if (bulletinProvider != null)
+                {
+                    var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc), _sessionCalendar.MarketTimeZone);
+                    var sessionDate = DateOnly.FromDateTime(localNow);
+
+                    if (_sessionCalendar.IsTradingDay(sessionDate))
+                    {
+                        _logger.LogInformation("Attempting BIST Daily Bulletin ingestion for session {Date}...", sessionDate);
+                        var import = await bulletinProvider.ImportBulletinForDateAsync(sessionDate, force: false, stoppingToken);
+
+                        if (import.Status != MarketDataImportStatus.Success && import.Status != MarketDataImportStatus.Skipped)
+                        {
+                            // Strict invariant: No new valid bulletin = no daily scan = no signals = no paper orders
+                            _logger.LogWarning("Bulletin for session {Date} not yet ready (Status: {Status}, Error: {Error}). Postponing daily scan pipeline.",
+                                sessionDate, import.Status, import.ErrorMessage);
+
+                            heartbeat.CompletedAt = DateTime.UtcNow;
+                            heartbeat.Success = false;
+                            heartbeat.ErrorMessage = $"Daily bulletin not available for {sessionDate}: {import.ErrorMessage}";
+                            await context.SaveChangesAsync(stoppingToken);
+                            return;
+                        }
+
+                        _logger.LogInformation("Bulletin ready for {Date}. Executing pending T+1 paper trading orders...", sessionDate);
+                        var paperService = scope.ServiceProvider.GetService<IPaperTradingService>();
+                        if (paperService != null)
+                        {
+                            var filledCount = await paperService.ExecutePendingOrdersForSessionAsync(sessionDate, stoppingToken);
+                            _logger.LogInformation("Executed {FilledCount} pending T+1 paper orders for session {Date}.", filledCount, sessionDate);
+                        }
+                    }
+                }
+            }
+
             var results = await scanner.ScanUniverseAsync(timeframe, null, stoppingToken);
+
+            // Execute auto-trading for Daily timeframe (queues PendingNextSessionOpen orders for next trading day)
+            if (timeframe == Timeframe.Daily)
+            {
+                var paperService = scope.ServiceProvider.GetService<IPaperTradingService>();
+                if (paperService != null)
+                {
+                    var autoPortfolios = await context.PaperPortfolios
+                        .Where(p => p.IsAutoTradingEnabled)
+                        .Select(p => p.Id)
+                        .ToListAsync(stoppingToken);
+
+                    foreach (var portfolioId in autoPortfolios)
+                    {
+                        try
+                        {
+                            await paperService.AutoTradeScanAsync(portfolioId, stoppingToken);
+                        }
+                        catch (Exception pEx)
+                        {
+                            _logger.LogWarning(pEx, "Failed auto-trade scan for portfolio {PortfolioId}", portfolioId);
+                        }
+                    }
+                }
+            }
             
             // Retrieve latest data bar timestamp to distinguish successful worker execution from stale data scan
             var latestBar = await context.PriceBars

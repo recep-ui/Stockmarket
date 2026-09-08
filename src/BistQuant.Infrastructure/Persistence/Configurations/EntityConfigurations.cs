@@ -114,6 +114,9 @@ public class SignalConfiguration : IEntityTypeConfiguration<Signal>
         builder.HasIndex(s => new { s.Timeframe, s.CreatedAt, s.Score })
                .HasDatabaseName("IX_Signals_Timeframe_CreatedAt_Score");
 
+        builder.HasIndex(s => new { s.SymbolId, s.StrategyId, s.Timeframe, s.SourceSessionDate })
+               .HasDatabaseName("IX_Signals_Symbol_Strategy_Timeframe_SessionDate");
+
         builder.HasOne(s => s.Symbol)
                .WithMany(sym => sym.Signals)
                .HasForeignKey(s => s.SymbolId)
@@ -440,6 +443,52 @@ public class WorkerHeartbeatConfiguration : IEntityTypeConfiguration<WorkerHeart
         builder.Property(w => w.ScanType).HasMaxLength(50).IsRequired();
         builder.Property(w => w.ErrorMessage).HasMaxLength(1000);
         builder.HasIndex(w => new { w.Timeframe, w.CompletedAt });
+    }
+}
+
+public class MarketDataImportConfiguration : IEntityTypeConfiguration<MarketDataImport>
+{
+    public void Configure(EntityTypeBuilder<MarketDataImport> builder)
+    {
+        builder.HasKey(m => m.Id);
+        builder.Property(m => m.Provider).HasMaxLength(100).IsRequired();
+        builder.Property(m => m.SourceFileName).HasMaxLength(255).IsRequired();
+        builder.Property(m => m.SourceUrl).HasMaxLength(500);
+        builder.Property(m => m.Sha256).HasMaxLength(64).IsRequired();
+        builder.Property(m => m.SchemaVersion).HasMaxLength(20).IsRequired();
+        builder.Property(m => m.ErrorMessage).HasMaxLength(2000);
+
+        builder.HasIndex(m => new { m.SessionDate, m.Sha256 });
+        builder.HasIndex(m => new { m.Provider, m.SessionDate });
+    }
+}
+
+public class DailyInstrumentMarketStatsConfiguration : IEntityTypeConfiguration<DailyInstrumentMarketStats>
+{
+    public void Configure(EntityTypeBuilder<DailyInstrumentMarketStats> builder)
+    {
+        builder.HasKey(d => d.Id);
+        builder.Property(d => d.PreviousLastPrice).HasPrecision(18, 4);
+        builder.Property(d => d.ClosingSessionPrice).HasPrecision(18, 4);
+        builder.Property(d => d.ChangePercent).HasPrecision(10, 4);
+        builder.Property(d => d.Vwap).HasPrecision(18, 4);
+        builder.Property(d => d.TotalTradedValue).HasPrecision(24, 2);
+        builder.Property(d => d.TotalTradedVolume).HasPrecision(24, 2);
+        builder.Property(d => d.CorporateActionRaw).HasMaxLength(100);
+        builder.Property(d => d.MarketSegment).HasMaxLength(20);
+        builder.Property(d => d.TradingMethod).HasMaxLength(20);
+
+        builder.HasIndex(d => new { d.SymbolId, d.SessionDate }).IsUnique();
+
+        builder.HasOne(d => d.Symbol)
+               .WithMany()
+               .HasForeignKey(d => d.SymbolId)
+               .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasOne(d => d.SourceImport)
+               .WithMany()
+               .HasForeignKey(d => d.SourceImportId)
+               .OnDelete(DeleteBehavior.SetNull);
     }
 }
 

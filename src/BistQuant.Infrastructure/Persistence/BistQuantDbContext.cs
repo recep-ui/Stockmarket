@@ -31,6 +31,8 @@ public class BistQuantDbContext : DbContext, IApplicationDbContext
     public DbSet<AlertNotification> AlertNotifications => Set<AlertNotification>();
     public DbSet<User> Users => Set<User>();
     public DbSet<WorkerHeartbeat> WorkerHeartbeats => Set<WorkerHeartbeat>();
+    public DbSet<MarketDataImport> MarketDataImports => Set<MarketDataImport>();
+    public DbSet<DailyInstrumentMarketStats> DailyInstrumentMarketStats => Set<DailyInstrumentMarketStats>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {

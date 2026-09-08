@@ -1,6 +1,8 @@
 using BistQuant.Application.Common.Interfaces;
+using BistQuant.Application.Interfaces;
 using BistQuant.Domain.Enums;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BistQuant.Application.Services.MarketData;
@@ -9,20 +11,45 @@ public class MarketScanScheduler : IMarketScanScheduler
 {
     private readonly IConfiguration _configuration;
     private readonly IMarketSessionCalendar _sessionCalendar;
+    private readonly IServiceScopeFactory? _scopeFactory;
     private readonly ILogger<MarketScanScheduler> _logger;
 
     public MarketScanScheduler(
         IConfiguration configuration,
         IMarketSessionCalendar sessionCalendar,
-        ILogger<MarketScanScheduler> logger)
+        ILogger<MarketScanScheduler> logger,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _configuration = configuration;
         _sessionCalendar = sessionCalendar;
         _logger = logger;
+        _scopeFactory = scopeFactory;
+    }
+
+    private MarketDataProviderCapabilities? GetCapabilities()
+    {
+        if (_scopeFactory == null) return null;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var provider = scope.ServiceProvider.GetService<IMarketDataProvider>();
+            return provider?.Capabilities;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public bool IsTimeframeEnabled(Timeframe timeframe)
     {
+        // If provider capabilities restrict timeframes, strictly respect provider
+        var caps = GetCapabilities();
+        if (caps != null && !caps.SupportedTimeframes.Contains(timeframe))
+        {
+            return false;
+        }
+
         return timeframe switch
         {
             Timeframe.M15 => _configuration.GetValue<bool?>("ScannerSchedules:M15Enabled") ?? true,
@@ -84,13 +111,18 @@ public class MarketScanScheduler : IMarketScanScheduler
             }
         }
 
-        // 3. Daily: runs after BIST market close and finalization buffer (default 18:15 Europe/Istanbul)
+        // 3. Daily: runs after BIST market close and finalization / bulletin publication window
         if (IsTimeframeEnabled(Timeframe.Daily))
         {
-            var todayFinalizationUtc = _sessionCalendar.GetDailyFinalizationUtc(asOfUtc);
-            if (asOfUtc >= todayFinalizationUtc)
+            var sessionDate = DateOnly.FromDateTime(localNow);
+            var caps = GetCapabilities();
+            var triggerTimeUtc = (caps != null && caps.RequiresSessionClosure)
+                ? _sessionCalendar.GetBulletinPublicationTimeUtc(sessionDate)
+                : _sessionCalendar.GetDailyFinalizationUtc(asOfUtc);
+
+            if (asOfUtc >= triggerTimeUtc)
             {
-                if (!lastCompletedMap.TryGetValue(Timeframe.Daily, out var lastDaily) || lastDaily < todayFinalizationUtc)
+                if (!lastCompletedMap.TryGetValue(Timeframe.Daily, out var lastDaily) || lastDaily < triggerTimeUtc)
                 {
                     dueList.Add(Timeframe.Daily);
                 }

@@ -55,6 +55,9 @@ services:
       Jwt__Audience: "${JWT_AUDIENCE:-BistQuantClient}"
       Telegram__BotToken: "${TELEGRAM_BOT_TOKEN:-}"
       Telegram__DefaultChatId: "${TELEGRAM_DEFAULT_CHAT_ID:-}"
+      BistBulletin__StoragePath: "/app/data/marketdata"
+    volumes:
+      - bist_market_data:/app/data/marketdata
     networks:
       - bistquant-net
 
@@ -72,6 +75,9 @@ services:
       DatabaseProvider: SqlServer
       ConnectionStrings__DefaultConnection: "Server=mssql,1433;Database=BistQuantDb;User Id=sa;Password=${MSSQL_SA_PASSWORD:?MSSQL_SA_PASSWORD must be set in .env};TrustServerCertificate=True;"
       ConnectionStrings__Redis: "redis:6379"
+      BistBulletin__StoragePath: "/app/data/marketdata"
+    volumes:
+      - bist_market_data:/app/data/marketdata
     networks:
       - bistquant-net
 
@@ -107,6 +113,7 @@ services:
 volumes:
   mssql_data:
   redis_data:
+  bist_market_data:
 
 networks:
   bistquant-net:

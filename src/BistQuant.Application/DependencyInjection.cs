@@ -12,6 +12,8 @@ public static class DependencyInjection
         services.AddSingleton<IHolidayCalendar, ConfigurableHolidayCalendar>();
         services.AddSingleton<IMarketSessionCalendar, BistMarketSessionCalendar>();
         services.AddSingleton<IMarketScanScheduler, MarketScanScheduler>();
+        services.AddSingleton<BistDailyBulletinParser>();
+        services.AddScoped<ICorporateActionAdjustmentService, CorporateActionAdjustmentService>();
         services.AddScoped<ISignalClassifier, SignalClassifier>();
         services.AddScoped<IMarketDataFreshnessPolicy, MarketDataFreshnessPolicy>();
         services.AddScoped<ITechnicalAnalysisService, TechnicalAnalysisService>();

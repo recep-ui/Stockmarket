@@ -64,16 +64,49 @@ public class BistMarketSessionCalendar : IMarketSessionCalendar
         return TimeZoneInfo.ConvertTimeToUtc(unspecified, _istanbulTz);
     }
 
-    public bool IsTradingDay(DateTime utcTime)
+    public MarketSessionInfo GetSessionInfo(DateOnly date)
     {
-        var local = ToLocal(utcTime);
-        if (local.DayOfWeek == DayOfWeek.Saturday || local.DayOfWeek == DayOfWeek.Sunday)
+        var isTrading = IsTradingDay(date);
+        var isHalf = IsHalfDay(date);
+        var open = isTrading ? GetMarketOpenTime(date) : TimeSpan.Zero;
+        var close = isTrading ? GetMarketCloseTime(date) : TimeSpan.Zero;
+        var ov = _holidayCalendar.GetOverride(date);
+        var desc = ov?.Reason ?? (isTrading ? (isHalf ? "Half-Day Trading Session" : "Regular Trading Session") : "Weekend / Closed");
+        return new MarketSessionInfo(date, isTrading, isHalf, open, close, desc);
+    }
+
+    public bool IsTradingDay(DateOnly date)
+    {
+        if (date.DayOfWeek == DayOfWeek.Saturday || date.DayOfWeek == DayOfWeek.Sunday)
         {
             return false;
         }
 
-        var date = DateOnly.FromDateTime(local);
         return !_holidayCalendar.IsHoliday(date);
+    }
+
+    public bool IsTradingDay(DateTime utcTime)
+    {
+        var local = ToLocal(utcTime);
+        var date = DateOnly.FromDateTime(local);
+        return IsTradingDay(date);
+    }
+
+    public bool IsHalfDay(DateOnly date)
+    {
+        return IsTradingDay(date) && _holidayCalendar.IsHalfDay(date);
+    }
+
+    public TimeSpan GetMarketOpenTime(DateOnly date)
+    {
+        var ov = _holidayCalendar.GetOverride(date);
+        return ov?.OpenTime ?? _openTime;
+    }
+
+    public TimeSpan GetMarketCloseTime(DateOnly date)
+    {
+        var ov = _holidayCalendar.GetOverride(date);
+        return ov?.CloseTime ?? _closeTime;
     }
 
     public bool IsMarketOpen(DateTime utcTime)
@@ -81,29 +114,73 @@ public class BistMarketSessionCalendar : IMarketSessionCalendar
         if (!IsTradingDay(utcTime)) return false;
 
         var local = ToLocal(utcTime);
+        var date = DateOnly.FromDateTime(local);
+        var openTime = GetMarketOpenTime(date);
+        var closeTime = GetMarketCloseTime(date);
         var timeOfDay = local.TimeOfDay;
-        return timeOfDay >= _openTime && timeOfDay < _closeTime;
+        return timeOfDay >= openTime && timeOfDay < closeTime;
     }
 
     public DateTime GetSessionOpenUtc(DateTime dateUtc)
     {
         var local = ToLocal(dateUtc);
-        var localOpen = local.Date.Add(_openTime);
+        var date = DateOnly.FromDateTime(local);
+        var localOpen = local.Date.Add(GetMarketOpenTime(date));
         return ToUtc(localOpen);
     }
 
     public DateTime GetSessionCloseUtc(DateTime dateUtc)
     {
         var local = ToLocal(dateUtc);
-        var localClose = local.Date.Add(_closeTime);
+        var date = DateOnly.FromDateTime(local);
+        var localClose = local.Date.Add(GetMarketCloseTime(date));
+        return ToUtc(localClose);
+    }
+
+    public DateTime GetSessionCloseUtc(DateOnly date)
+    {
+        var localClose = date.ToDateTime(TimeOnly.FromTimeSpan(GetMarketCloseTime(date)));
         return ToUtc(localClose);
     }
 
     public DateTime GetDailyFinalizationUtc(DateTime dateUtc)
     {
         var local = ToLocal(dateUtc);
-        var localFin = local.Date.Add(_dailyFinalizationTime);
+        var date = DateOnly.FromDateTime(local);
+        var closeTime = GetMarketCloseTime(date);
+        // On half-days, finalization is 15 minutes after 13:00 close (13:15)
+        var finTime = IsHalfDay(date) ? closeTime.Add(TimeSpan.FromMinutes(15)) : _dailyFinalizationTime;
+        var localFin = local.Date.Add(finTime);
         return ToUtc(localFin);
+    }
+
+    public DateTime GetBulletinPublicationTimeUtc(DateOnly date)
+    {
+        var closeTime = GetMarketCloseTime(date);
+        // Official bulletin publication window opens 25 minutes after close (18:25 on full days, 13:25 on half days)
+        var pubTime = closeTime.Add(TimeSpan.FromMinutes(25));
+        var localPub = date.ToDateTime(TimeOnly.FromTimeSpan(pubTime));
+        return ToUtc(localPub);
+    }
+
+    public DateOnly GetNextTradingDay(DateOnly date)
+    {
+        var candidate = date.AddDays(1);
+        while (!IsTradingDay(candidate))
+        {
+            candidate = candidate.AddDays(1);
+        }
+        return candidate;
+    }
+
+    public DateOnly GetPreviousTradingDay(DateOnly date)
+    {
+        var candidate = date.AddDays(-1);
+        while (!IsTradingDay(candidate))
+        {
+            candidate = candidate.AddDays(-1);
+        }
+        return candidate;
     }
 
     public bool IsClosedCandleAvailable(Timeframe timeframe, DateTime utcTime)
@@ -114,27 +191,37 @@ public class BistMarketSessionCalendar : IMarketSessionCalendar
     public DateTime? GetLastClosedCandleTimeUtc(Timeframe timeframe, DateTime utcTime)
     {
         var local = ToLocal(utcTime);
+        var date = DateOnly.FromDateTime(local);
 
         switch (timeframe)
         {
             case Timeframe.Daily:
             {
-                if (IsTradingDay(utcTime) && local.TimeOfDay >= _dailyFinalizationTime)
+                var isTrading = IsTradingDay(date);
+                var isHalf = isTrading && IsHalfDay(date);
+                var closeTime = isTrading ? GetMarketCloseTime(date) : _closeTime;
+                var finTime = isHalf ? closeTime.Add(TimeSpan.FromMinutes(15)) : _dailyFinalizationTime;
+
+                if (isTrading && local.TimeOfDay >= finTime)
                 {
                     return ToUtc(local.Date);
                 }
 
-                var prevTradingDay = GetPreviousTradingDay(local.Date);
-                return ToUtc(prevTradingDay);
+                var prevTradingDay = GetPreviousTradingDay(date);
+                return ToUtc(prevTradingDay.ToDateTime(TimeOnly.MinValue));
             }
 
             case Timeframe.H1:
             {
-                if (IsTradingDay(utcTime))
+                var isTrading = IsTradingDay(date);
+                var openTime = isTrading ? GetMarketOpenTime(date) : _openTime;
+                var closeTime = isTrading ? GetMarketCloseTime(date) : _closeTime;
+
+                if (isTrading)
                 {
-                    if (local.TimeOfDay >= _openTime.Add(TimeSpan.FromHours(1)))
+                    if (local.TimeOfDay >= openTime.Add(TimeSpan.FromHours(1)))
                     {
-                        var cappedTime = local.TimeOfDay >= _closeTime ? _closeTime : local.TimeOfDay;
+                        var cappedTime = local.TimeOfDay >= closeTime ? closeTime : local.TimeOfDay;
                         var completedHours = (int)cappedTime.TotalHours;
                         var closedCandleTime = local.Date.AddHours(completedHours);
                         var candleOpenLocal = closedCandleTime.AddHours(-1);
@@ -142,17 +229,22 @@ public class BistMarketSessionCalendar : IMarketSessionCalendar
                     }
                 }
 
-                var prevDay = IsTradingDay(utcTime) ? GetPreviousTradingDay(local.Date) : GetLastTradingDayOnOrBefore(local.Date.AddDays(-1));
-                return ToUtc(prevDay.Add(_closeTime).AddHours(-1));
+                var prevDay = isTrading ? GetPreviousTradingDay(date) : GetPreviousTradingDay(date);
+                var prevClose = GetMarketCloseTime(prevDay);
+                return ToUtc(prevDay.ToDateTime(TimeOnly.FromTimeSpan(prevClose)).AddHours(-1));
             }
 
             case Timeframe.M15:
             {
-                if (IsTradingDay(utcTime))
+                var isTrading = IsTradingDay(date);
+                var openTime = isTrading ? GetMarketOpenTime(date) : _openTime;
+                var closeTime = isTrading ? GetMarketCloseTime(date) : _closeTime;
+
+                if (isTrading)
                 {
-                    if (local.TimeOfDay >= _openTime.Add(TimeSpan.FromMinutes(15)))
+                    if (local.TimeOfDay >= openTime.Add(TimeSpan.FromMinutes(15)))
                     {
-                        var cappedTime = local.TimeOfDay >= _closeTime ? _closeTime : local.TimeOfDay;
+                        var cappedTime = local.TimeOfDay >= closeTime ? closeTime : local.TimeOfDay;
                         var totalMinutes = (int)cappedTime.TotalMinutes;
                         var completed15Block = (totalMinutes / 15) * 15;
                         var closedCandleTime = local.Date.AddMinutes(completed15Block);
@@ -161,8 +253,9 @@ public class BistMarketSessionCalendar : IMarketSessionCalendar
                     }
                 }
 
-                var prevDay = IsTradingDay(utcTime) ? GetPreviousTradingDay(local.Date) : GetLastTradingDayOnOrBefore(local.Date.AddDays(-1));
-                return ToUtc(prevDay.Add(_closeTime).AddMinutes(-15));
+                var prevDay = isTrading ? GetPreviousTradingDay(date) : GetPreviousTradingDay(date);
+                var prevClose = GetMarketCloseTime(prevDay);
+                return ToUtc(prevDay.ToDateTime(TimeOnly.FromTimeSpan(prevClose)).AddMinutes(-15));
             }
 
             default:
@@ -179,25 +272,5 @@ public class BistMarketSessionCalendar : IMarketSessionCalendar
         }
 
         return utcTime;
-    }
-
-    private DateTime GetPreviousTradingDay(DateTime localDate)
-    {
-        var candidate = localDate.AddDays(-1);
-        while (candidate.DayOfWeek == DayOfWeek.Saturday || candidate.DayOfWeek == DayOfWeek.Sunday || _holidayCalendar.IsHoliday(DateOnly.FromDateTime(candidate)))
-        {
-            candidate = candidate.AddDays(-1);
-        }
-        return candidate.Date;
-    }
-
-    private DateTime GetLastTradingDayOnOrBefore(DateTime localDate)
-    {
-        var candidate = localDate;
-        while (candidate.DayOfWeek == DayOfWeek.Saturday || candidate.DayOfWeek == DayOfWeek.Sunday || _holidayCalendar.IsHoliday(DateOnly.FromDateTime(candidate)))
-        {
-            candidate = candidate.AddDays(-1);
-        }
-        return candidate.Date;
     }
 }

@@ -59,9 +59,9 @@ graph TB
 
     subgraph External Interfaces
         MarketDataProv[IMarketDataProvider]
-        MockProv[Mock / Seed Data Provider]
+        BistBulletinProv[BistDailyBulletinMarketDataProvider (Official EOD)]
+        MockProv[Mock / Seed Data Provider (Unit Testing)]
         CsvProv[CSV Market Data Importer]
-        LiveApiProv[Licensed BIST API Provider]
         TelegramProv[Telegram Bot Notification Provider]
         OpenAiProv[OpenAI / Ollama AI Provider]
     end
@@ -77,9 +77,9 @@ graph TB
     Core Application & Engines --> RedisCache
     Core Application & Engines --> MarketDataProv
 
+    MarketDataProv --> BistBulletinProv
     MarketDataProv --> MockProv
     MarketDataProv --> CsvProv
-    MarketDataProv --> LiveApiProv
 ```
 
 ---
