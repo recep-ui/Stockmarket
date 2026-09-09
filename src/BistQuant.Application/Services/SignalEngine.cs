@@ -194,6 +194,28 @@ public class SignalEngine : ISignalEngine
         // Unified evaluation pipeline shared directly with BacktestEngine
         var evalResult = _pipeline.Evaluate(latestBar, snapshot, history, strategy, prevBar, prevSnapshot);
 
+        // History gate: symbol must have >= 220 Daily bars in DB (for stabilized EMA200 / indicators).
+        // If < 220 bars, actionable Buy/StrongBuy/Sell signals must not be produced for default universe scanning.
+        if (strategy == null && timeframe == Timeframe.Daily)
+        {
+            var dailyBarCount = await _context.PriceBars
+                .CountAsync(p => p.SymbolId == symbolId && p.Timeframe == Timeframe.Daily, cancellationToken);
+
+            if (dailyBarCount < 220)
+            {
+                _logger.LogInformation("History gate: Symbol {SymbolId} has only {Count} daily bars (< 220). Clamping actionable signals to Watch/Weak.",
+                    symbolId, dailyBarCount);
+                if (evalResult.SignalType == SignalType.Buy || evalResult.SignalType == SignalType.StrongBuy || evalResult.SignalType == SignalType.BuyCandidate)
+                {
+                    evalResult = evalResult with { SignalType = SignalType.Watch };
+                }
+                else if (evalResult.SignalType == SignalType.Sell || evalResult.SignalType == SignalType.StrongSell)
+                {
+                    evalResult = evalResult with { SignalType = SignalType.Weak };
+                }
+            }
+        }
+
         // Required rule: If custom strategy is supplied and evalResult.IsSignalTriggered == false,
         // do not persist signal, do not trigger alerts, and do not emit scanner result.
         if (strategy != null && !evalResult.IsSignalTriggered)

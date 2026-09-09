@@ -13,7 +13,9 @@ import {
   Bell,
   Bookmark,
   Code2,
-  ChevronRight
+  ChevronRight,
+  TrendingUp,
+  Database
 } from "lucide-react";
 
 interface NavItem {
@@ -26,12 +28,17 @@ interface NavItem {
 const navItems: NavItem[] = [
   { name: "Genel Bakış", href: "/dashboard", icon: LayoutDashboard },
   { name: "BIST Tarama", href: "/scanner", icon: Filter },
+  { name: "İleri Test (Forward)", href: "/forward-testing", icon: TrendingUp, badge: "LIVE" },
+  { name: "Sanal Portföy", href: "/paper-trading", icon: Wallet, badge: "₺" },
   { name: "Takip Listeleri", href: "/watchlists", icon: Bookmark },
   { name: "Hisse Analizi", href: "/stocks/THYAO", icon: BarChart3 },
   { name: "Strateji Lab", href: "/strategies", icon: Lightbulb },
   { name: "Backtest", href: "/backtests", icon: FlaskConical },
-  { name: "Sanal Portföy", href: "/paper-trading", icon: Wallet, badge: "₺" },
   { name: "Alarmlar", href: "/alerts", icon: Bell },
+];
+
+const adminItems: NavItem[] = [
+  { name: "Veri İndirme & Gap", href: "/admin/backfill", icon: Database },
 ];
 
 export const Sidebar: React.FC = () => {
@@ -65,10 +72,43 @@ export const Sidebar: React.FC = () => {
                   </div>
 
                   {item.badge && (
-                    <span className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                      item.badge === "LIVE"
+                        ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 animate-pulse"
+                        : "bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                    }`}>
                       {item.badge}
                     </span>
                   )}
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
+
+        <div>
+          <span className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+            Sistem & Veri
+          </span>
+          <nav className="mt-2 space-y-1">
+            {adminItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = pathname === item.href;
+
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-semibold transition ${
+                    isActive
+                      ? "bg-sky-500/15 text-sky-400 border border-sky-500/30 shadow-[0_0_12px_rgba(14,165,233,0.15)]"
+                      : "text-slate-400 hover:text-white hover:bg-[#131923]"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Icon className={`w-4 h-4 ${isActive ? "text-sky-400" : "text-slate-400"}`} />
+                    <span>{item.name}</span>
+                  </div>
                 </Link>
               );
             })}

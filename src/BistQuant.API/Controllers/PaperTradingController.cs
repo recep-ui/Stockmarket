@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using BistQuant.Application.Common.Interfaces;
 using BistQuant.Application.Common.Models;
+using BistQuant.Application.DTOs.ForwardTesting;
 using BistQuant.Application.DTOs.PaperTrading;
 using BistQuant.Application.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -15,11 +16,16 @@ namespace BistQuant.API.Controllers;
 public class PaperTradingController : ControllerBase
 {
     private readonly IPaperTradingService _paperTradingService;
+    private readonly IForwardTestPerformanceService _performanceService;
     private readonly IApplicationDbContext _context;
 
-    public PaperTradingController(IPaperTradingService paperTradingService, IApplicationDbContext context)
+    public PaperTradingController(
+        IPaperTradingService paperTradingService,
+        IForwardTestPerformanceService performanceService,
+        IApplicationDbContext context)
     {
         _paperTradingService = paperTradingService;
+        _performanceService = performanceService;
         _context = context;
     }
 
@@ -46,6 +52,34 @@ public class PaperTradingController : ControllerBase
     {
         var portfolio = await _paperTradingService.GetOrCreateDefaultPortfolioAsync(GetUserId(), cancellationToken);
         return Ok(ApiResponse<PaperPortfolioDto>.Ok(portfolio));
+    }
+
+    [HttpGet("forward-test")]
+    public async Task<ActionResult<ApiResponse<PaperPortfolioDto>>> GetForwardTestPortfolio(
+        CancellationToken cancellationToken = default)
+    {
+        var portfolio = await _paperTradingService.GetOrCreateForwardTestPortfolioAsync(GetUserId(), cancellationToken);
+        return Ok(ApiResponse<PaperPortfolioDto>.Ok(portfolio));
+    }
+
+    [HttpGet("{id:long}/forward-test-performance")]
+    public async Task<ActionResult<ApiResponse<ForwardTestPerformanceDto>>> GetForwardTestPerformance(
+        [FromRoute] long id,
+        CancellationToken cancellationToken = default)
+    {
+        var isOwner = await VerifyPortfolioOwnershipAsync(id, GetUserId(), cancellationToken);
+        if (!isOwner)
+        {
+            return Forbid();
+        }
+
+        var performance = await _performanceService.GetPerformanceAsync(id, cancellationToken);
+        if (performance == null)
+        {
+            return NotFound(ApiResponse<ForwardTestPerformanceDto>.Fail($"Portfolio #{id} not found."));
+        }
+
+        return Ok(ApiResponse<ForwardTestPerformanceDto>.Ok(performance));
     }
 
     [HttpGet("{id}/positions")]

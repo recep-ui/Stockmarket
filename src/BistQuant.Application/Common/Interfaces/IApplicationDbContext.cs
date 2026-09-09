@@ -30,6 +30,8 @@ public interface IApplicationDbContext
     DbSet<DailyInstrumentMarketStats> DailyInstrumentMarketStats { get; }
     DbSet<BulletinFetchAttempt> BulletinFetchAttempts { get; }
     DbSet<IndicatorContinuityWarning> IndicatorContinuityWarnings { get; }
+    DbSet<BackfillJob> BackfillJobs { get; }
+    DbSet<ForwardTestDailyReport> ForwardTestDailyReports { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

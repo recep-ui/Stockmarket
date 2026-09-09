@@ -360,6 +360,7 @@ export interface PaperTradeDto {
   realizedPnL: number;
   commission: number;
   executedAt: string;
+  sourceSignalId?: number | null;
 }
 
 export interface CreateAlertRequest {
@@ -447,4 +448,175 @@ export interface UserProfileDto {
   lastName: string;
   role: string;
   createdAt: string;
+}
+
+// ==========================================
+// Backfill & Market Data Coverage Types
+// ==========================================
+
+export type BackfillJobStatus =
+  | "Pending"
+  | "Running"
+  | "Paused"
+  | "Completed"
+  | "CompletedWithErrors"
+  | "Failed"
+  | "Cancelled";
+
+export interface CreateBackfillJobRequest {
+  startDate: string;
+  endDate: string;
+  forceRevisionCheck?: boolean;
+}
+
+export interface BackfillJobDto {
+  id: number;
+  startDate: string;
+  endDate: string;
+  currentDate?: string | null;
+  status: BackfillJobStatus;
+  sessionsTotal: number;
+  sessionsCompleted: number;
+  sessionsSkipped: number;
+  sessionsFailed: number;
+  barsInserted: number;
+  startedAt: string;
+  completedAt?: string | null;
+  lastError?: string | null;
+  createdByUserId?: number | null;
+}
+
+export type MarketDataGapReason =
+  | "NoTrade"
+  | "Suspended"
+  | "BulletinMissing"
+  | "ImportFailed"
+  | "Unknown";
+
+export interface MarketDataGapDto {
+  sessionDate: string;
+  reason: MarketDataGapReason;
+  description: string;
+}
+
+export interface SymbolGapsDto {
+  ticker: string;
+  totalGaps: number;
+  gaps: MarketDataGapDto[];
+}
+
+export interface SymbolCoverageDto {
+  ticker: string;
+  name: string;
+  firstBarDate?: string | null;
+  lastBarDate?: string | null;
+  dailyBarCount: number;
+  expectedTradingSessions: number;
+  missingSessions: number;
+  coveragePercent: number;
+  ema200Ready: boolean;
+  latestBulletinDate?: string | null;
+  hasCorporateActionWarning: boolean;
+}
+
+export interface UniverseCoverageSummaryDto {
+  activeSymbols: number;
+  symbolsWith300PlusBars: number;
+  symbolsWith500PlusBars: number;
+  averageCoveragePercent: number;
+  totalMissingSessions: number;
+  symbolsWithCorporateActionWarnings: number;
+  symbolCoverages: SymbolCoverageDto[];
+}
+
+// ==========================================
+// Forward Testing Performance Types
+// ==========================================
+
+export interface PerformanceMetricDto {
+  initialCapital: number;
+  equity: number;
+  cash: number;
+  openPositionValue: number;
+  realizedPnL: number;
+  unrealizedPnL: number;
+  totalReturnPercent: number;
+  winRatePercent: number;
+  profitFactor: number;
+  expectancy: number;
+  maxDrawdownPercent: number;
+  avgHoldingPeriodDays: number;
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+}
+
+export interface ScoreBracketBreakdownDto {
+  scoreBracket: string;
+  tradeCount: number;
+  winningTrades: number;
+  winRatePercent: number;
+  realizedPnL: number;
+  totalProfit: number;
+}
+
+export interface StrategyBreakdownDto {
+  strategyName: string;
+  tradeCount: number;
+  winRatePercent: number;
+  realizedPnL: number;
+}
+
+export interface SymbolBreakdownDto {
+  symbol: string;
+  tradeCount: number;
+  winRatePercent: number;
+  realizedPnL: number;
+}
+
+export interface MonthlyBreakdownDto {
+  month: string;
+  tradeCount: number;
+  realizedPnL: number;
+  returnPercent: number;
+}
+
+export interface CurvePointDto {
+  date: string;
+  equity: number;
+  drawdownPercent: number;
+}
+
+export interface ForwardTestDailyReportDto {
+  id: number;
+  portfolioId: number;
+  sessionDate: string;
+  bulletinRevision: number;
+  symbolsAnalyzed: number;
+  signalsCreated: number;
+  buySignals: number;
+  sellSignals: number;
+  ordersQueued: number;
+  ordersFilled: number;
+  ordersExpired: number;
+  realizedPnL: number;
+  unrealizedPnL: number;
+  portfolioEquity: number;
+  drawdownPercent: number;
+  errors?: string | null;
+  createdAt: string;
+}
+
+export interface ForwardTestPerformanceDto {
+  portfolioId: number;
+  portfolioName: string;
+  startDate: string;
+  isForwardTest: boolean;
+  metrics: PerformanceMetricDto;
+  scoreBrackets: ScoreBracketBreakdownDto[];
+  strategies: StrategyBreakdownDto[];
+  symbols: SymbolBreakdownDto[];
+  monthly: MonthlyBreakdownDto[];
+  equityCurve: CurvePointDto[];
+  recentDailyReports: ForwardTestDailyReportDto[];
 }

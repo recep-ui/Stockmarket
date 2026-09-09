@@ -106,6 +106,9 @@ public class Worker : BackgroundService
 
         try
         {
+            int dailyFilledCount = 0;
+            DateOnly? dailySessionDate = null;
+
             if (timeframe == Timeframe.Daily)
             {
                 var bulletinProvider = scope.ServiceProvider.GetService<IBistDailyBulletinMarketDataProvider>();
@@ -113,6 +116,7 @@ public class Worker : BackgroundService
                 {
                     var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc), _sessionCalendar.MarketTimeZone);
                     var sessionDate = DateOnly.FromDateTime(localNow);
+                    dailySessionDate = sessionDate;
 
                     if (_sessionCalendar.IsTradingDay(sessionDate))
                     {
@@ -136,8 +140,8 @@ public class Worker : BackgroundService
                         var paperService = scope.ServiceProvider.GetService<IPaperTradingService>();
                         if (paperService != null)
                         {
-                            var filledCount = await paperService.ExecutePendingOrdersForSessionAsync(sessionDate, stoppingToken);
-                            _logger.LogInformation("Executed {FilledCount} pending T+1 paper orders for session {Date}.", filledCount, sessionDate);
+                            dailyFilledCount = await paperService.ExecutePendingOrdersForSessionAsync(sessionDate, stoppingToken);
+                            _logger.LogInformation("Executed {FilledCount} pending T+1 paper orders for session {Date}.", dailyFilledCount, sessionDate);
                         }
                     }
                 }
@@ -145,14 +149,16 @@ public class Worker : BackgroundService
 
             var results = await scanner.ScanUniverseAsync(timeframe, null, stoppingToken);
 
-            // Execute auto-trading for Daily timeframe (queues PendingNextSessionOpen orders for next trading day)
+            // Execute auto-trading and daily report generation for Daily timeframe
             if (timeframe == Timeframe.Daily)
             {
                 var paperService = scope.ServiceProvider.GetService<IPaperTradingService>();
+                var perfService = scope.ServiceProvider.GetService<IForwardTestPerformanceService>();
+
                 if (paperService != null)
                 {
                     var autoPortfolios = await context.PaperPortfolios
-                        .Where(p => p.IsAutoTradingEnabled)
+                        .Where(p => p.IsAutoTradingEnabled || p.IsForwardTest)
                         .Select(p => p.Id)
                         .ToListAsync(stoppingToken);
 
@@ -161,10 +167,16 @@ public class Worker : BackgroundService
                         try
                         {
                             await paperService.AutoTradeScanAsync(portfolioId, stoppingToken);
+
+                            if (perfService != null && dailySessionDate.HasValue)
+                            {
+                                var report = await perfService.GenerateDailyReportAsync(portfolioId, dailySessionDate.Value, results.Count, dailyFilledCount, stoppingToken);
+                                await perfService.SendDailyTelegramSummaryAsync(report, stoppingToken);
+                            }
                         }
                         catch (Exception pEx)
                         {
-                            _logger.LogWarning(pEx, "Failed auto-trade scan for portfolio {PortfolioId}", portfolioId);
+                            _logger.LogWarning(pEx, "Failed auto-trade scan / reporting for portfolio {PortfolioId}", portfolioId);
                         }
                     }
                 }

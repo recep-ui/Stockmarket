@@ -20,7 +20,8 @@ public record ScannerItemDto(
     decimal? VolumeRatio,
     string Trend,
     decimal Volume,
-    DateTime SignalTime
+    DateTime SignalTime,
+    AnalysisStatus AnalysisStatus = AnalysisStatus.Analyzed
 );
 
 public record ScannerFilterDto(

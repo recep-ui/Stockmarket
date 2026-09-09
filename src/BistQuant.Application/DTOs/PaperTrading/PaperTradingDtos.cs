@@ -49,5 +49,6 @@ public record PaperTradeDto(
     decimal TotalValue,
     decimal RealizedPnL,
     decimal Commission,
-    DateTime ExecutedAt
+    DateTime ExecutedAt,
+    long? SourceSignalId = null
 );

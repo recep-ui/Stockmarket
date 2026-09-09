@@ -12,10 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace BistQuant.Infrastructure.Migrations.SqlServer
 {
     [DbContext(typeof(BistQuantDbContext))]
-    partial class BistQuantDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260909115257_OperationalizeForwardTesting")]
+    partial class OperationalizeForwardTesting
     {
         /// <inheritdoc />
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

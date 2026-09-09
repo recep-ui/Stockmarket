@@ -28,7 +28,7 @@ public class MarketDataImport : BaseEntity<long>
     public bool IsRevision { get; set; }
     public long? SupersedesImportId { get; set; }
     public MarketDataImport? SupersedesImport { get; set; }
-    public bool IsCurrent { get; set; } = true;
+    public bool IsCurrent { get; set; } = false;
 
     // Fetch and attempt metadata
     public DateTime? LastAttemptAt { get; set; }
@@ -36,4 +36,6 @@ public class MarketDataImport : BaseEntity<long>
     public int AttemptCount { get; set; }
     public int? LastHttpStatus { get; set; }
     public BulletinDownloadStatus? DownloadStatus { get; set; }
+    public MarketDataOrigin DataOrigin { get; set; } = MarketDataOrigin.OfficialBistBulletin;
 }
+

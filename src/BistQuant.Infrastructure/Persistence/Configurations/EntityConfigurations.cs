@@ -337,6 +337,9 @@ public class PaperOrderConfiguration : IEntityTypeConfiguration<PaperOrder>
 
         builder.HasIndex(o => new { o.Status, o.TargetExecutionSessionDate })
                .HasDatabaseName("IX_PaperOrders_Status_TargetExecutionSessionDate");
+
+        builder.HasIndex(o => new { o.PortfolioId, o.Status, o.TargetExecutionSessionDate })
+               .HasDatabaseName("IX_PaperOrders_Portfolio_Status_TargetExecutionSessionDate");
     }
 }
 
@@ -366,6 +369,7 @@ public class PaperTradeConfiguration : IEntityTypeConfiguration<PaperTrade>
                .OnDelete(DeleteBehavior.SetNull);
 
         builder.HasIndex(t => t.PaperOrderId);
+        builder.HasIndex(t => t.SourceSignalId);
     }
 }
 
@@ -474,7 +478,13 @@ public class MarketDataImportConfiguration : IEntityTypeConfiguration<MarketData
                .IsUnique()
                .HasDatabaseName("UIX_MarketDataImports_Provider_SessionDate_Sha256");
 
-        builder.HasIndex(m => new { m.Provider, m.SessionDate });
+        builder.HasIndex(m => new { m.Provider, m.SessionDate, m.IsCurrent })
+               .HasDatabaseName("IX_MarketDataImports_Provider_SessionDate_IsCurrent");
+
+        builder.HasIndex(m => new { m.Provider, m.SessionDate })
+               .IsUnique()
+               .HasFilter("[IsCurrent] = 1 AND [Status] = 4")
+               .HasDatabaseName("UIX_MarketDataImports_Provider_SessionDate_CurrentSuccess");
 
         builder.HasOne(m => m.SupersedesImport)
                .WithMany()
@@ -541,4 +551,38 @@ public class IndicatorContinuityWarningConfiguration : IEntityTypeConfiguration<
                .OnDelete(DeleteBehavior.Cascade);
     }
 }
+
+public class BackfillJobConfiguration : IEntityTypeConfiguration<BackfillJob>
+{
+    public void Configure(EntityTypeBuilder<BackfillJob> builder)
+    {
+        builder.HasKey(j => j.Id);
+        builder.Property(j => j.LastError).HasMaxLength(2000);
+        builder.HasIndex(j => new { j.Status, j.CurrentDate })
+               .HasDatabaseName("IX_BackfillJobs_Status_CurrentDate");
+    }
+}
+
+public class ForwardTestDailyReportConfiguration : IEntityTypeConfiguration<ForwardTestDailyReport>
+{
+    public void Configure(EntityTypeBuilder<ForwardTestDailyReport> builder)
+    {
+        builder.HasKey(r => r.Id);
+        builder.Property(r => r.RealizedPnL).HasPrecision(18, 4);
+        builder.Property(r => r.UnrealizedPnL).HasPrecision(18, 4);
+        builder.Property(r => r.PortfolioEquity).HasPrecision(18, 4);
+        builder.Property(r => r.DrawdownPercent).HasPrecision(10, 4);
+        builder.Property(r => r.Errors).HasMaxLength(2000);
+
+        builder.HasIndex(r => new { r.PortfolioId, r.SessionDate })
+               .IsUnique()
+               .HasDatabaseName("UIX_ForwardTestDailyReports_Portfolio_SessionDate");
+
+        builder.HasOne(r => r.Portfolio)
+               .WithMany()
+               .HasForeignKey(r => r.PortfolioId)
+               .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
 

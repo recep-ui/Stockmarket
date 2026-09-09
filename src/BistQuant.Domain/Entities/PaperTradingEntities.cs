@@ -16,6 +16,9 @@ public class PaperPortfolio : BaseEntity<long>
     public int AutoTradingMinScore { get; set; } = 80;
     public decimal AutoTradingMaxAllocationPercent { get; set; } = 5.0m;
 
+    public bool IsForwardTest { get; set; } = false;
+    public DateOnly? ForwardTestStartDate { get; set; }
+
     public ICollection<PaperPosition> Positions { get; set; } = new List<PaperPosition>();
     public ICollection<PaperOrder> Orders { get; set; } = new List<PaperOrder>();
     public ICollection<PaperTrade> Trades { get; set; } = new List<PaperTrade>();
@@ -64,6 +67,7 @@ public class PaperOrder : BaseEntity<long>
     public DateOnly? TargetExecutionSessionDate { get; set; }
     public DateOnly? ExecutedSessionDate { get; set; }
     public string? CancellationReason { get; set; }
+    public bool SourceBulletinRevisedAfterExecution { get; set; }
 }
 
 public class PaperTrade : BaseEntity<long>
@@ -77,6 +81,9 @@ public class PaperTrade : BaseEntity<long>
     public long? PaperOrderId { get; set; }
     public PaperOrder? PaperOrder { get; set; }
 
+    public long? SourceSignalId { get; set; }
+    public bool SourceBulletinRevisedAfterExecution { get; set; }
+
     public OrderSide Side { get; set; }
     public decimal Quantity { get; set; }
     public decimal Price { get; set; }
@@ -85,3 +92,4 @@ public class PaperTrade : BaseEntity<long>
 
     public DateTime ExecutedAt { get; set; } = DateTime.UtcNow;
 }
+

@@ -280,12 +280,14 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
             .Replace("{MM}", date.ToString("MM"))
             .Replace("{DD}", date.ToString("dd"));
 
+        var nextAttemptNumber = (previousImport?.AttemptCount ?? 0) + 1;
         var sw = Stopwatch.StartNew();
         var fetchAttempt = new BulletinFetchAttempt
         {
             SessionDate = date,
             SourceUrl = url,
-            AttemptedAtUtc = DateTime.UtcNow
+            AttemptedAtUtc = DateTime.UtcNow,
+            AttemptCount = nextAttemptNumber
         };
 
         HttpResponseMessage response;
@@ -300,7 +302,7 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
             fetchAttempt.ElapsedMs = sw.ElapsedMilliseconds;
             fetchAttempt.Status = BulletinDownloadStatus.ProviderUnavailable;
             fetchAttempt.ErrorMessage = $"Network error: {ex.Message}";
-            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, nextAttemptNumber, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
 
             await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 0, ex.Message, null, cancellationToken);
@@ -315,7 +317,7 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         {
             fetchAttempt.Status = BulletinDownloadStatus.NotPublishedYet;
             fetchAttempt.ErrorMessage = "HTTP 404 - Bulletin not published yet.";
-            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, nextAttemptNumber, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
 
             await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 404, fetchAttempt.ErrorMessage, null, cancellationToken);
@@ -352,7 +354,7 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         {
             fetchAttempt.Status = BulletinDownloadStatus.ProviderUnavailable;
             fetchAttempt.ErrorMessage = $"HTTP {(int)response.StatusCode} - Provider server error.";
-            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, nextAttemptNumber, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
 
             await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, (int)response.StatusCode, fetchAttempt.ErrorMessage, null, cancellationToken);
@@ -363,7 +365,7 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         {
             fetchAttempt.Status = BulletinDownloadStatus.Failed;
             fetchAttempt.ErrorMessage = $"HTTP {(int)response.StatusCode} - Unexpected status code.";
-            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, nextAttemptNumber, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
 
             await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, (int)response.StatusCode, fetchAttempt.ErrorMessage, null, cancellationToken);
@@ -377,7 +379,7 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         {
             fetchAttempt.Status = BulletinDownloadStatus.InvalidSourceContent;
             fetchAttempt.ErrorMessage = "Received empty response from server.";
-            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, nextAttemptNumber, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
             await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 200, fetchAttempt.ErrorMessage, null, cancellationToken);
             return BulletinDownloadResult.InvalidSourceContent(date, 200, "Empty payload received.");
@@ -391,7 +393,7 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         {
             fetchAttempt.Status = BulletinDownloadStatus.InvalidSourceContent;
             fetchAttempt.ErrorMessage = "Received HTML/XML content instead of bulletin ZIP/CSV.";
-            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
+            fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, nextAttemptNumber, null);
             _context.BulletinFetchAttempts.Add(fetchAttempt);
             await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 200, fetchAttempt.ErrorMessage, null, cancellationToken);
             return BulletinDownloadResult.InvalidSourceContent(date, 200, "Received HTML/XML response page instead of valid bulletin data.");
@@ -410,7 +412,7 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
                     ? BulletinDownloadStatus.DateMismatch
                     : BulletinDownloadStatus.InvalidSourceContent;
                 fetchAttempt.ErrorMessage = zipError ?? "Could not extract valid CSV from ZIP archive.";
-                fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, (previousImport?.AttemptCount ?? 0) + 1, null);
+                fetchAttempt.NextAttemptAtUtc = CalculateNextAttempt(fetchAttempt.Status, nextAttemptNumber, null);
                 _context.BulletinFetchAttempts.Add(fetchAttempt);
                 await UpdateBackoffStateAsync(date, previousImport, fetchAttempt.Status, 200, fetchAttempt.ErrorMessage, null, cancellationToken);
                 return fetchAttempt.Status == BulletinDownloadStatus.DateMismatch
@@ -529,7 +531,23 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
             };
         }
 
-        // Check local disk first
+        // 1. Check DB first (skip network and disk reprocessing if current successful import exists)
+        if (!force)
+        {
+            var existingSuccess = await _context.MarketDataImports
+                .FirstOrDefaultAsync(i => i.Provider == Capabilities.ProviderName
+                                       && i.SessionDate == date
+                                       && i.IsCurrent
+                                       && i.Status == MarketDataImportStatus.Success, cancellationToken);
+            if (existingSuccess != null)
+            {
+                _logger.LogInformation("Bulletin for {Date} already successfully imported in DB (Rev #{Rev}). Skipping re-download and re-processing.",
+                    date, existingSuccess.RevisionNumber);
+                return existingSuccess;
+            }
+        }
+
+        // 2. Check local disk next
         var candidateFiles = new[]
         {
             Path.Combine(_storagePath, $"thb{date:yyyyMMdd}1.zip"),
@@ -773,8 +791,7 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
                 "Bulletin REVISION detected for session {Date}. Old SHA: {OldSha}, New SHA: {NewSha}. Creating Revision #{Rev}.",
                 sessionDate.Value, currentImport.Sha256, sha256, currentImport.RevisionNumber + 1);
 
-            currentImport.IsCurrent = false;
-
+            // Invariant: DO NOT deactivate currentImport yet! Keep currentImport.IsCurrent = true until Rev 2 successfully commits.
             int nextRev = existingImports.Max(i => i.RevisionNumber) + 1;
             import = new MarketDataImport
             {
@@ -788,11 +805,13 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
                 RevisionNumber = nextRev,
                 IsRevision = true,
                 SupersedesImportId = currentImport.Id,
-                IsCurrent = true,
+                IsCurrent = false, // Remains false until transaction commits
                 Status = MarketDataImportStatus.Processing,
                 RowsRead = parseResult.TotalRowsRead,
                 RowsAccepted = parseResult.AcceptedRows,
-                RowsRejected = parseResult.RejectedRows
+                RowsRejected = parseResult.RejectedRows,
+                AttemptCount = currentImport.AttemptCount > 0 ? currentImport.AttemptCount : 1,
+                DataOrigin = MarketDataOrigin.OfficialBistBulletin
             };
             _context.MarketDataImports.Add(import);
         }
@@ -807,6 +826,11 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         }
         else
         {
+            var fetchAttempt = await _context.BulletinFetchAttempts
+                .Where(a => a.SessionDate == sessionDate.Value)
+                .OrderByDescending(a => a.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+
             import = new MarketDataImport
             {
                 Provider = Capabilities.ProviderName,
@@ -818,11 +842,13 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
                 DownloadedAt = DateTime.UtcNow,
                 RevisionNumber = 1,
                 IsRevision = false,
-                IsCurrent = true,
+                IsCurrent = false, // Remains false until transaction commits
                 Status = MarketDataImportStatus.Processing,
                 RowsRead = parseResult.TotalRowsRead,
                 RowsAccepted = parseResult.AcceptedRows,
-                RowsRejected = parseResult.RejectedRows
+                RowsRejected = parseResult.RejectedRows,
+                AttemptCount = fetchAttempt?.AttemptCount ?? 1,
+                DataOrigin = MarketDataOrigin.OfficialBistBulletin
             };
             _context.MarketDataImports.Add(import);
         }
@@ -988,6 +1014,12 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
                     _context.PriceBars.AddRange(newBars);
                 }
 
+                if (currentImport != null && import.IsRevision)
+                {
+                    currentImport.IsCurrent = false;
+                }
+
+                import.IsCurrent = true;
                 import.Status = MarketDataImportStatus.Success;
                 import.PriceBarsInserted = barsInserted;
                 import.PriceBarsUpdated = barsUpdated;
@@ -1006,6 +1038,12 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
                     await transaction.RollbackAsync(cancellationToken);
                 }
 
+                // Invariant: Rollback preserves current revision
+                if (currentImport != null)
+                {
+                    currentImport.IsCurrent = true;
+                }
+                import.IsCurrent = false;
                 import.Status = MarketDataImportStatus.Failed;
                 import.ErrorMessage = $"Database transaction aborted and rolled back (0 partial bars): {ex.Message}";
                 await _context.SaveChangesAsync(CancellationToken.None);
@@ -1030,6 +1068,56 @@ public class BistDailyBulletinMarketDataProvider : IBistDailyBulletinMarketDataP
         }
 
         decompressedStream?.Dispose();
+
+        // Handle Requirement 31: Data revision audit and order reconciliation
+        if (import.IsRevision)
+        {
+            try
+            {
+                var pendingOrders = await _context.PaperOrders
+                    .Where(o => o.SignalSessionDate == sessionDate.Value && o.Status == OrderStatus.PendingNextSessionOpen)
+                    .ToListAsync(cancellationToken);
+
+                foreach (var pOrder in pendingOrders)
+                {
+                    pOrder.Status = OrderStatus.Cancelled;
+                    pOrder.CancellationReason = "CancelledDueToBulletinRevision";
+                }
+
+                var filledOrders = await _context.PaperOrders
+                    .Where(o => (o.SignalSessionDate == sessionDate.Value || o.ExecutedSessionDate == sessionDate.Value)
+                             && o.Status == OrderStatus.Filled)
+                    .ToListAsync(cancellationToken);
+
+                foreach (var fOrder in filledOrders)
+                {
+                    fOrder.SourceBulletinRevisedAfterExecution = true;
+                }
+
+                var filledTrades = await _context.PaperTrades
+                    .Include(t => t.PaperOrder)
+                    .Where(t => t.PaperOrder != null &&
+                               (t.PaperOrder.SignalSessionDate == sessionDate.Value || t.PaperOrder.ExecutedSessionDate == sessionDate.Value))
+                    .ToListAsync(cancellationToken);
+
+                foreach (var fTrade in filledTrades)
+                {
+                    fTrade.SourceBulletinRevisedAfterExecution = true;
+                }
+
+                if (pendingOrders.Count > 0 || filledOrders.Count > 0 || filledTrades.Count > 0)
+                {
+                    await _context.SaveChangesAsync(cancellationToken);
+                    _logger.LogInformation(
+                        "Reconciled {PendingCount} cancelled pending orders, {OrderCount} filled orders, and {TradeCount} trades due to bulletin revision #{Rev} for session {Date}.",
+                        pendingOrders.Count, filledOrders.Count, filledTrades.Count, import.RevisionNumber, sessionDate.Value);
+                }
+            }
+            catch (Exception revEx)
+            {
+                _logger.LogWarning(revEx, "Non-critical error during post-revision order reconciliation for session {Date}", sessionDate.Value);
+            }
+        }
 
         _logger.LogInformation(
             "Successfully imported BIST bulletin for {Date}. Revision #{Rev}, Accepted rows: {Accepted}, Bars inserted: {Inserted}, Bars updated: {Updated}",

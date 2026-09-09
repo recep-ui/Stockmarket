@@ -40,6 +40,7 @@ public class BistDailyBulletinIntegrationTests
 
         var inMemoryConfig = new Dictionary<string, string?>
         {
+            ["BistBulletin:VerifiedDownloadEndpoint"] = "https://www.borsaistanbul.com/data/thb/{YYYY}/{MM}/thb{YYYY}{MM}{DD}1.zip",
             ["BistBulletin:BaseUrl"] = "https://www.borsaistanbul.com/data/bulten",
             ["BistBulletin:StoragePath"] = Path.Combine(Path.GetTempPath(), "bist_test_marketdata_" + Guid.NewGuid().ToString("N")),
             ["BistSession:TimeZone"] = "Europe/Istanbul"
@@ -259,7 +260,7 @@ public class BistDailyBulletinIntegrationTests
         Assert.Equal(322.0m, trades[0].Price);
     }
 
-    [Fact]
+    [OfficialSmokeTestFact]
     [Trait("Category", "OfficialSmokeTest")]
     public async Task OfficialSampleBulletin_20260907_IngestsAccurately_AndVerifiesAselsAndThyao()
     {
@@ -287,8 +288,6 @@ public class BistDailyBulletinIntegrationTests
 
         if (zipPath == null || !File.Exists(zipPath))
         {
-            // Official smoke test requires an externally supplied official BIST zip.
-            // If absent, gracefully skip without failing standard CI runs.
             return;
         }
 
@@ -397,6 +396,94 @@ public class BistDailyBulletinIntegrationTests
         Assert.Equal(50542600m, garanBar.Volume);
     }
 
+    [Fact]
+    public async Task RevisionAtomicity_Success_FlipsCurrentRevisionAtomically()
+    {
+        var (context, provider, _, _) = CreateTestEnvironment();
+        var sessionDate = new DateOnly(2026, 3, 19);
+
+        // 1. Revision 1: initial bulletin
+        var csvRev1 = CreateSyntheticBulletinCsv(sessionDate, 300.0m, 305.0m, 60.0m, 61.0m);
+        using var streamRev1 = new MemoryStream(Encoding.UTF8.GetBytes(csvRev1));
+        var import1 = await provider.ImportBulletinStreamAsync(sessionDate, $"thb{sessionDate:yyyyMMdd}1.csv", streamRev1);
+
+        Assert.Equal(MarketDataImportStatus.Success, import1.Status);
+        Assert.True(import1.IsCurrent);
+        Assert.Equal(1, import1.RevisionNumber);
+
+        // 2. Revision 2: updated bulletin with different prices
+        var csvRev2 = CreateSyntheticBulletinCsv(sessionDate, 302.0m, 308.0m, 60.5m, 62.0m);
+        using var streamRev2 = new MemoryStream(Encoding.UTF8.GetBytes(csvRev2));
+        var import2 = await provider.ImportBulletinStreamAsync(sessionDate, $"thb{sessionDate:yyyyMMdd}2.csv", streamRev2);
+
+        Assert.Equal(MarketDataImportStatus.Success, import2.Status);
+        Assert.True(import2.IsCurrent);
+        Assert.Equal(2, import2.RevisionNumber);
+
+        // Verify Rev 1 is no longer current
+        var reloadedImport1 = await context.MarketDataImports.AsNoTracking().FirstAsync(i => i.Id == import1.Id);
+        Assert.False(reloadedImport1.IsCurrent);
+
+        // Database invariant: exactly one record with IsCurrent == true for this sessionDate
+        var currentCount = await context.MarketDataImports
+            .CountAsync(i => i.Provider == provider.Capabilities.ProviderName && i.SessionDate == sessionDate && i.IsCurrent && i.Status == MarketDataImportStatus.Success);
+        Assert.Equal(1, currentCount);
+    }
+
+    [Fact]
+    public async Task RevisionAtomicity_FailedRevision_PreservesRevision1Current()
+    {
+        var (context, provider, _, _) = CreateTestEnvironment();
+        var sessionDate = new DateOnly(2026, 3, 20);
+
+        // 1. Revision 1: successful
+        var csvRev1 = CreateSyntheticBulletinCsv(sessionDate, 310.0m, 315.0m, 62.0m, 63.0m);
+        using var streamRev1 = new MemoryStream(Encoding.UTF8.GetBytes(csvRev1));
+        var import1 = await provider.ImportBulletinStreamAsync(sessionDate, $"thb{sessionDate:yyyyMMdd}1.csv", streamRev1);
+
+        Assert.Equal(MarketDataImportStatus.Success, import1.Status);
+        Assert.True(import1.IsCurrent);
+
+        // 2. Revision 2: corrupt data that fails validation
+        var corruptBytes = Encoding.UTF8.GetBytes("INVALID_BULLETIN_CONTENT_NO_VALID_COLUMNS");
+        using var corruptStream = new MemoryStream(corruptBytes);
+
+        var import2 = await provider.ImportBulletinStreamAsync(sessionDate, $"thb{sessionDate:yyyyMMdd}2.csv", corruptStream);
+        Assert.True(import2.Status == MarketDataImportStatus.Failed || import2.Status == MarketDataImportStatus.SchemaMismatch);
+        Assert.False(import2.IsCurrent);
+
+        // Verify Rev 1 remains current and successful
+        var reloadedImport1 = await context.MarketDataImports.AsNoTracking().FirstAsync(i => i.Id == import1.Id);
+        Assert.Equal(MarketDataImportStatus.Success, reloadedImport1.Status);
+        Assert.True(reloadedImport1.IsCurrent);
+
+        // Exactly one current successful revision remains
+        var currentCount = await context.MarketDataImports
+            .CountAsync(i => i.Provider == provider.Capabilities.ProviderName && i.SessionDate == sessionDate && i.IsCurrent && i.Status == MarketDataImportStatus.Success);
+        Assert.Equal(1, currentCount);
+    }
+
+    [Fact]
+    public async Task BulletinFetchAttempt_AttemptNumbering_IncrementsStrictlyOnHttpRequests()
+    {
+        var (context, provider, _, _) = CreateTestEnvironment();
+        var sessionDate = new DateOnly(2026, 3, 23); // Monday
+
+        // Perform first download attempt to non-existent endpoint (will fail / 404 / connection error)
+        var result1 = await provider.DownloadBulletinForDateAsync(sessionDate);
+        var attempts1 = await context.BulletinFetchAttempts.Where(a => a.SessionDate == sessionDate).ToListAsync();
+        if (attempts1.Count > 0)
+        {
+            Assert.Equal(1, attempts1[0].AttemptCount);
+        }
+
+        // Non-HTTP check: weekend date must NOT produce HTTP fetch attempt increment
+        var weekendDate = new DateOnly(2026, 3, 21); // Saturday
+        var weekendResult = await provider.DownloadBulletinForDateAsync(weekendDate);
+        var weekendAttempts = await context.BulletinFetchAttempts.Where(a => a.SessionDate == weekendDate).ToListAsync();
+        Assert.Empty(weekendAttempts); // No HTTP fetch attempt recorded
+    }
+
     private class DummySignalEngine : ISignalEngine
     {
         public SignalType ClassifySignal(int score) => SignalType.Buy;
@@ -407,5 +494,17 @@ public class BistDailyBulletinIntegrationTests
             Task.FromResult<Signal?>(null);
         public Task<Signal?> GetLatestSignalAsync(string symbol, Timeframe timeframe, CancellationToken cancellationToken = default) =>
             Task.FromResult<Signal?>(null);
+    }
+}
+
+public sealed class OfficialSmokeTestFactAttribute : FactAttribute
+{
+    public OfficialSmokeTestFactAttribute()
+    {
+        string? zipPath = Environment.GetEnvironmentVariable("BIST_OFFICIAL_BULLETIN_SAMPLE_PATH");
+        if (string.IsNullOrWhiteSpace(zipPath) || !File.Exists(zipPath))
+        {
+            Skip = "OfficialSmokeTest: SKIPPED – BIST_OFFICIAL_BULLETIN_SAMPLE_PATH not configured";
+        }
     }
 }

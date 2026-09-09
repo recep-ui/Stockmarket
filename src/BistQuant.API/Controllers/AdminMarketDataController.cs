@@ -1,5 +1,8 @@
+using System.Security.Claims;
 using BistQuant.Application.Common.Interfaces;
 using BistQuant.Application.Common.Models;
+using BistQuant.Application.DTOs.Backfill;
+using BistQuant.Application.DTOs.MarketData;
 using BistQuant.Application.Interfaces;
 using BistQuant.Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
@@ -8,7 +11,6 @@ using Microsoft.AspNetCore.Mvc;
 namespace BistQuant.API.Controllers;
 
 public record ImportSessionRequest(DateOnly SessionDate, bool Force = false);
-public record BackfillRequest(DateOnly StartDate, DateOnly EndDate, bool Force = false);
 
 public record MarketDataProviderStatusDto(
     string ProviderName,
@@ -27,17 +29,20 @@ public class AdminMarketDataController : ControllerBase
 {
     private readonly IBistDailyBulletinMarketDataProvider _bulletinProvider;
     private readonly IBistBulletinBackfillService _backfillService;
+    private readonly IMarketDataGapDetector _gapDetector;
     private readonly IMarketDataProvider _marketDataProvider;
     private readonly ILogger<AdminMarketDataController> _logger;
 
     public AdminMarketDataController(
         IBistDailyBulletinMarketDataProvider bulletinProvider,
         IBistBulletinBackfillService backfillService,
+        IMarketDataGapDetector gapDetector,
         IMarketDataProvider marketDataProvider,
         ILogger<AdminMarketDataController> logger)
     {
         _bulletinProvider = bulletinProvider;
         _backfillService = backfillService;
+        _gapDetector = gapDetector;
         _marketDataProvider = marketDataProvider;
         _logger = logger;
     }
@@ -140,23 +145,113 @@ public class AdminMarketDataController : ControllerBase
     }
 
     [HttpPost("backfill")]
-    public async Task<ActionResult<ApiResponse<BackfillProgress>>> RunBackfill(
-        [FromBody] BackfillRequest request,
+    public async Task<ActionResult<ApiResponse<BackfillJobDto>>> StartBackfill(
+        [FromBody] CreateBackfillJobRequest request,
         CancellationToken cancellationToken)
     {
         if (request.StartDate > request.EndDate)
         {
-            return BadRequest(ApiResponse<BackfillProgress>.Fail("StartDate must be prior or equal to EndDate."));
+            return BadRequest(ApiResponse<BackfillJobDto>.Fail("StartDate must be prior or equal to EndDate."));
         }
 
         if (request.EndDate > DateOnly.FromDateTime(DateTime.UtcNow))
         {
-            return BadRequest(ApiResponse<BackfillProgress>.Fail("EndDate cannot be in the future."));
+            return BadRequest(ApiResponse<BackfillJobDto>.Fail("EndDate cannot be in the future."));
         }
 
-        _logger.LogInformation("Admin triggered historical bulletin backfill from {Start} to {End}", request.StartDate, request.EndDate);
-        var result = await _backfillService.BackfillRangeAsync(request.StartDate, request.EndDate, request.Force, null, cancellationToken);
+        long? userId = long.TryParse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var uid) ? uid : null;
 
-        return Ok(ApiResponse<BackfillProgress>.Ok(result));
+        _logger.LogInformation("Admin triggered historical bulletin backfill from {Start} to {End} (forceCheck: {Force})",
+            request.StartDate, request.EndDate, request.ForceRevisionCheck);
+
+        var job = await _backfillService.StartBackfillAsync(request.StartDate, request.EndDate, request.ForceRevisionCheck, userId, cancellationToken);
+        return Ok(ApiResponse<BackfillJobDto>.Ok(job));
+    }
+
+    [HttpGet("backfill")]
+    public async Task<ActionResult<ApiResponse<List<BackfillJobDto>>>> GetBackfillJobs(CancellationToken cancellationToken)
+    {
+        var jobs = await _backfillService.GetBackfillJobsAsync(cancellationToken);
+        return Ok(ApiResponse<List<BackfillJobDto>>.Ok(jobs));
+    }
+
+    [HttpGet("backfill/{id:long}")]
+    public async Task<ActionResult<ApiResponse<BackfillJobDto>>> GetBackfillJob(
+        [FromRoute] long id,
+        CancellationToken cancellationToken)
+    {
+        var job = await _backfillService.GetBackfillJobAsync(id, cancellationToken);
+        if (job == null)
+        {
+            return NotFound(ApiResponse<BackfillJobDto>.Fail($"Backfill job #{id} not found."));
+        }
+
+        return Ok(ApiResponse<BackfillJobDto>.Ok(job));
+    }
+
+    [HttpPost("backfill/{id:long}/pause")]
+    public async Task<ActionResult<ApiResponse<bool>>> PauseBackfill(
+        [FromRoute] long id,
+        CancellationToken cancellationToken)
+    {
+        var success = await _backfillService.PauseBackfillAsync(id, cancellationToken);
+        if (!success)
+        {
+            return BadRequest(ApiResponse<bool>.Fail($"Cannot pause backfill job #{id}. Job must be in Running or Pending status."));
+        }
+
+        return Ok(ApiResponse<bool>.Ok(true));
+    }
+
+    [HttpPost("backfill/{id:long}/resume")]
+    public async Task<ActionResult<ApiResponse<bool>>> ResumeBackfill(
+        [FromRoute] long id,
+        CancellationToken cancellationToken)
+    {
+        var success = await _backfillService.ResumeBackfillAsync(id, cancellationToken);
+        if (!success)
+        {
+            return BadRequest(ApiResponse<bool>.Fail($"Cannot resume backfill job #{id}. Job must be in Paused status."));
+        }
+
+        return Ok(ApiResponse<bool>.Ok(true));
+    }
+
+    [HttpPost("backfill/{id:long}/cancel")]
+    public async Task<ActionResult<ApiResponse<bool>>> CancelBackfill(
+        [FromRoute] long id,
+        CancellationToken cancellationToken)
+    {
+        var success = await _backfillService.CancelBackfillAsync(id, cancellationToken);
+        if (!success)
+        {
+            return BadRequest(ApiResponse<bool>.Fail($"Cannot cancel backfill job #{id}. Job may already be completed or cancelled."));
+        }
+
+        return Ok(ApiResponse<bool>.Ok(true));
+    }
+
+    [HttpGet("coverage")]
+    public async Task<ActionResult<ApiResponse<UniverseCoverageSummaryDto>>> GetUniverseCoverage(
+        [FromQuery] DateOnly? startDate = null,
+        [FromQuery] DateOnly? endDate = null,
+        CancellationToken cancellationToken = default)
+    {
+        var summary = await _gapDetector.GetUniverseCoverageAsync(startDate, endDate, cancellationToken);
+        return Ok(ApiResponse<UniverseCoverageSummaryDto>.Ok(summary));
+    }
+
+    [HttpGet("coverage/{symbol}/gaps")]
+    public async Task<ActionResult<ApiResponse<SymbolGapsDto>>> GetSymbolGaps(
+        [FromRoute] string symbol,
+        [FromQuery] DateOnly? startDate = null,
+        [FromQuery] DateOnly? endDate = null,
+        CancellationToken cancellationToken = default)
+    {
+        var start = startDate ?? DateOnly.FromDateTime(DateTime.UtcNow.AddYears(-1));
+        var end = endDate ?? DateOnly.FromDateTime(DateTime.UtcNow);
+
+        var gaps = await _gapDetector.DetectGapsForSymbolAsync(symbol, start, end, cancellationToken);
+        return Ok(ApiResponse<SymbolGapsDto>.Ok(gaps));
     }
 }

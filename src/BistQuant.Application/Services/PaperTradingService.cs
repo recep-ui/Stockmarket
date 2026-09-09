@@ -20,6 +20,8 @@ public interface IPaperTradingService
     Task<int> ExecutePendingOrdersForSessionAsync(DateOnly sessionDate, CancellationToken cancellationToken = default);
 
     Task AutoTradeScanAsync(long portfolioId, CancellationToken cancellationToken = default);
+
+    Task<PaperPortfolioDto> GetOrCreateForwardTestPortfolioAsync(long userId, CancellationToken cancellationToken = default);
 }
 
 public class PaperTradingService : IPaperTradingService
@@ -162,7 +164,8 @@ public class PaperTradingService : IPaperTradingService
             Math.Round(t.Quantity * t.Price, 2),
             t.RealizedPnL,
             t.Commission,
-            t.ExecutedAt
+            t.ExecutedAt,
+            t.SourceSignalId
         )).ToList();
     }
 
@@ -203,7 +206,8 @@ public class PaperTradingService : IPaperTradingService
                         Math.Round(existingTrade.Quantity * existingTrade.Price, 2),
                         existingTrade.RealizedPnL,
                         existingTrade.Commission,
-                        existingTrade.ExecutedAt
+                        existingTrade.ExecutedAt,
+                        existingTrade.SourceSignalId
                     );
                 }
             }
@@ -345,7 +349,8 @@ public class PaperTradingService : IPaperTradingService
             Price = executionPrice,
             RealizedPnL = Math.Round(realizedPnL, 2),
             Commission = Math.Round(commission, 2),
-            ExecutedAt = DateTime.UtcNow
+            ExecutedAt = DateTime.UtcNow,
+            SourceSignalId = paperOrder.SourceSignalId
         };
 
         _context.PaperTrades.Add(trade);
@@ -361,7 +366,8 @@ public class PaperTradingService : IPaperTradingService
             Math.Round(totalOrderValue, 2),
             trade.RealizedPnL,
             trade.Commission,
-            trade.ExecutedAt
+            trade.ExecutedAt,
+            trade.SourceSignalId
         );
     }
 
@@ -373,6 +379,53 @@ public class PaperTradingService : IPaperTradingService
 
         if (portfolio == null || !portfolio.IsAutoTradingEnabled) return;
         if (portfolio.CashBalance <= 0) return;
+
+        decimal portfolioEquity = portfolio.CashBalance + portfolio.Positions.Sum(p => p.Quantity * p.CurrentPrice);
+        int currentOpenPositions = portfolio.Positions.Count(p => p.Quantity > 0);
+        int pendingBuyOrders = await _context.PaperOrders
+            .CountAsync(o => o.PortfolioId == portfolio.Id && o.Side == OrderSide.Buy && (o.Status == OrderStatus.Pending || o.Status == OrderStatus.PendingNextSessionOpen), cancellationToken);
+
+        // Forward Testing Safety Gates (Strictly enforced when portfolio.IsForwardTest is true)
+        if (portfolio.IsForwardTest)
+        {
+            // Safety Gate 1: Universe coverage gate (>= 95% of active symbols must have valid bars for session)
+            var activeSymbolsCount = await _context.Symbols.CountAsync(s => s.IsActive, cancellationToken);
+            var latestSessionDate = await _context.MarketDataImports
+                .Where(i => i.Status == MarketDataImportStatus.Success && i.IsCurrent)
+                .OrderByDescending(i => i.SessionDate)
+                .Select(i => (DateOnly?)i.SessionDate)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (latestSessionDate.HasValue && activeSymbolsCount > 0)
+            {
+                var sessionTimestamp = latestSessionDate.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+                var validBarsCount = await _context.PriceBars
+                    .CountAsync(p => p.Timeframe == Timeframe.Daily && p.Timestamp == sessionTimestamp, cancellationToken);
+
+                decimal coverage = (decimal)validBarsCount / activeSymbolsCount;
+                if (coverage < 0.95m)
+                {
+                    _logger.LogWarning("Auto trading safety gate: Universe coverage for session {SessionDate} is {Coverage:P1} (required >= 95%). Valid bars: {Valid}, Active: {Active}. Aborting trade generation.",
+                        latestSessionDate.Value, coverage, validBarsCount, activeSymbolsCount);
+                    return;
+                }
+            }
+
+            // Safety Gate 2: Max daily loss limit (3.0% drawdown limit from initial balance / session baseline)
+            if (portfolio.InitialBalance > 0 && (portfolio.InitialBalance - portfolioEquity) > (portfolio.InitialBalance * 0.03m))
+            {
+                _logger.LogWarning("Auto trading safety gate: Portfolio {PortfolioId} has hit max daily loss limit (3.0%). Current equity: {Equity:N2}, Initial: {Init:N2}. Halting orders.",
+                    portfolio.Id, portfolioEquity, portfolio.InitialBalance);
+                return;
+            }
+
+            // Safety Gate 3: Max open positions limit (max 10 open positions including pending buys)
+            if (currentOpenPositions + pendingBuyOrders >= 10)
+            {
+                _logger.LogInformation("Auto trading safety gate: Portfolio {PortfolioId} has reached max open positions limit (10).", portfolio.Id);
+                return;
+            }
+        }
 
         var now = DateTime.UtcNow;
 
@@ -389,15 +442,42 @@ public class PaperTradingService : IPaperTradingService
         var latestSignalsPerSymbol = candidateSignals
             .GroupBy(s => s.SymbolId)
             .Select(g => g.First())
-            .Take(5)
+            .Take(10)
             .ToList();
 
         foreach (var sig in latestSignalsPerSymbol)
         {
+            if (currentOpenPositions + pendingBuyOrders >= 10)
+            {
+                _logger.LogInformation("Reached max open positions limit (10). Halting further order generation.");
+                break;
+            }
+
             // Position rule: skip if already holding a position in this symbol
             if (portfolio.Positions.Any(p => p.SymbolId == sig.SymbolId && p.Quantity > 0))
             {
                 continue;
+            }
+
+            if (portfolio.IsForwardTest)
+            {
+                // Safety Gate 4: History gate (symbol must have >= 220 Daily bars in DB for stabilized EMA200 / indicators)
+                var barCount = await _context.PriceBars
+                    .CountAsync(p => p.SymbolId == sig.SymbolId && p.Timeframe == Timeframe.Daily, cancellationToken);
+                if (barCount < 220)
+                {
+                    _logger.LogWarning("Auto paper trade skipped for {Ticker}: insufficient history ({Count} < 220 bars).", sig.Symbol.Ticker, barCount);
+                    continue;
+                }
+
+                // Safety Gate 5: Corporate action warning gate (unacknowledged IndicatorContinuityWarning blocks trading)
+                var hasUnackWarning = await _context.IndicatorContinuityWarnings
+                    .AnyAsync(w => w.SymbolId == sig.SymbolId && !w.IsAcknowledged, cancellationToken);
+                if (hasUnackWarning)
+                {
+                    _logger.LogWarning("Auto paper trade skipped for {Ticker}: unacknowledged corporate action warning exists.", sig.Symbol.Ticker);
+                    continue;
+                }
             }
 
             // Market data freshness check
@@ -413,9 +493,28 @@ public class PaperTradingService : IPaperTradingService
                 continue;
             }
 
-            // Sizing based on portfolio equity and allocation limits
-            decimal portfolioEquity = portfolio.CashBalance + portfolio.Positions.Sum(p => p.Quantity * p.CurrentPrice);
-            decimal maxAllocation = Math.Min(portfolio.CashBalance, portfolioEquity * (portfolio.AutoTradingMaxAllocationPercent / 100.0m));
+            if (portfolio.IsForwardTest)
+            {
+                // Safety Gate 6: Liquidity filter (traded volume > 100k shares and traded value > 10M TRY on previous session)
+                var statsDate = sig.SourceSessionDate ?? DateOnly.FromDateTime(latestBar.Timestamp);
+                var latestStats = await _context.DailyInstrumentMarketStats
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(s => s.SymbolId == sig.SymbolId && s.SessionDate == statsDate, cancellationToken);
+
+                decimal tradedVolume = latestStats?.TotalTradedVolume ?? latestBar.Volume;
+                decimal tradedValue = latestStats?.TotalTradedValue ?? (latestBar.Close * latestBar.Volume);
+
+                if (tradedVolume <= 100_000 || tradedValue <= 10_000_000m)
+                {
+                    _logger.LogWarning("Auto paper trade skipped for {Ticker}: failed liquidity filter (Volume: {Vol:N0} <= 100k or Value: {Val:N0} <= 10M TRY).",
+                        sig.Symbol.Ticker, tradedVolume, tradedValue);
+                    continue;
+                }
+            }
+
+            // Sizing based on portfolio equity and allocation limits (capped strictly at max 10%)
+            decimal maxAllocPercent = Math.Min(10.0m, portfolio.AutoTradingMaxAllocationPercent);
+            decimal maxAllocation = Math.Min(portfolio.CashBalance, portfolioEquity * (maxAllocPercent / 100.0m));
             if (maxAllocation <= 0 || sig.Price <= 0) continue;
 
             decimal shares = Math.Floor(maxAllocation / sig.Price);
@@ -435,7 +534,7 @@ public class PaperTradingService : IPaperTradingService
 
             try
             {
-                var sigSessionDate = sig.SourceSessionDate ?? (latestBar != null ? DateOnly.FromDateTime(latestBar.Timestamp) : DateOnly.FromDateTime(sig.CreatedAt));
+                var sigSessionDate = sig.SourceSessionDate ?? DateOnly.FromDateTime(latestBar.Timestamp);
                 var targetExecutionDate = _sessionCalendar?.GetNextTradingDay(sigSessionDate) ?? sigSessionDate.AddDays(1);
 
                 // In T+1 EOD forward testing, market orders are submitted for execution at the NEXT trading session's open.
@@ -457,6 +556,7 @@ public class PaperTradingService : IPaperTradingService
 
                 _context.PaperOrders.Add(pendingOrder);
                 await _context.SaveChangesAsync(cancellationToken);
+                pendingBuyOrders++;
 
                 _logger.LogInformation("Auto Paper Trade queued (PendingNextSessionOpen) for {Ticker} ({Shares} shares, SignalSession: {SignalSession}, TargetSession: {TargetSession}, ClientOrderId: {ClientOrderId})",
                     sig.Symbol.Ticker, shares, sigSessionDate, targetExecutionDate, clientOrderId);
@@ -572,7 +672,8 @@ public class PaperTradingService : IPaperTradingService
                 Price = fillPrice,
                 RealizedPnL = 0,
                 Commission = Math.Round(order.Quantity * fillPrice * CommissionRate, 2),
-                ExecutedAt = fillTimestampUtc
+                ExecutedAt = fillTimestampUtc,
+                SourceSignalId = order.SourceSignalId
             };
             _context.PaperTrades.Add(trade);
 
@@ -606,5 +707,56 @@ public class PaperTradingService : IPaperTradingService
 
         await _context.SaveChangesAsync(cancellationToken);
         return filledCount;
+    }
+
+    public async Task<PaperPortfolioDto> GetOrCreateForwardTestPortfolioAsync(long userId, CancellationToken cancellationToken = default)
+    {
+        var portfolio = await _context.PaperPortfolios
+            .Include(p => p.Positions)
+            .ThenInclude(pos => pos.Symbol)
+            .FirstOrDefaultAsync(p => (p.UserId == userId || p.UserId == 1) && p.IsForwardTest, cancellationToken);
+
+        if (portfolio == null)
+        {
+            portfolio = new PaperPortfolio
+            {
+                UserId = userId,
+                Name = "BIST Zero-Cost Forward Test Portfolio",
+                InitialBalance = 100000m,
+                CashBalance = 100000m,
+                IsAutoTradingEnabled = true,
+                IsForwardTest = true,
+                ForwardTestStartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+                AutoTradingMinScore = 75,
+                AutoTradingMaxAllocationPercent = 10.0m
+            };
+
+            _context.PaperPortfolios.Add(portfolio);
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+
+        decimal positionsValue = 0;
+        foreach (var pos in portfolio.Positions)
+        {
+            positionsValue += pos.Quantity * pos.CurrentPrice;
+        }
+
+        decimal totalValue = portfolio.CashBalance + positionsValue;
+        decimal totalPnL = totalValue - portfolio.InitialBalance;
+        decimal totalPnLPercent = portfolio.InitialBalance > 0 ? Math.Round((totalPnL / portfolio.InitialBalance) * 100m, 2) : 0m;
+
+        return new PaperPortfolioDto(
+            portfolio.Id,
+            portfolio.UserId,
+            portfolio.Name,
+            portfolio.InitialBalance,
+            portfolio.CashBalance,
+            totalValue,
+            totalPnL,
+            totalPnLPercent,
+            portfolio.IsAutoTradingEnabled,
+            portfolio.AutoTradingMinScore,
+            portfolio.AutoTradingMaxAllocationPercent
+        );
     }
 }

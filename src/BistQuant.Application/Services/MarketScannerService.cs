@@ -69,6 +69,12 @@ public class MarketScannerService : IMarketScannerService
 
         var results = new List<ScannerItemDto>();
 
+        var unackWarnings = await _context.IndicatorContinuityWarnings
+            .AsNoTracking()
+            .Where(w => !w.IsAcknowledged)
+            .Select(w => w.SymbolId)
+            .ToHashSetAsync(cancellationToken);
+
         foreach (var sym in symbols)
         {
             try
@@ -106,6 +112,20 @@ public class MarketScannerService : IMarketScannerService
                 if (signal.Score >= 80) trendDesc = "Strong Bullish";
                 else if (signal.Score <= 30) trendDesc = "Strong Bearish";
 
+                var analysisStatus = AnalysisStatus.Analyzed;
+                if (unackWarnings.Contains(sym.Id))
+                {
+                    analysisStatus = AnalysisStatus.CorporateActionReview;
+                }
+                else if (timeframe == Timeframe.Daily)
+                {
+                    var barCount = await _context.PriceBars.CountAsync(p => p.SymbolId == sym.Id && p.Timeframe == Timeframe.Daily, cancellationToken);
+                    if (barCount < 220)
+                    {
+                        analysisStatus = AnalysisStatus.InsufficientHistory;
+                    }
+                }
+
                 results.Add(new ScannerItemDto(
                     sym.Ticker,
                     sym.Name,
@@ -124,7 +144,8 @@ public class MarketScannerService : IMarketScannerService
                     snapshot?.VolumeRatio,
                     trendDesc,
                     snapshot?.AverageVolume20 ?? 0,
-                    signal.CreatedAt
+                    signal.CreatedAt,
+                    analysisStatus
                 ));
             }
             catch (Exception ex)

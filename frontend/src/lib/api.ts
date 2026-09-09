@@ -19,9 +19,14 @@ import {
   LoginRequest,
   RegisterRequest,
   AuthResponseDto,
-  UserProfileDto,
   Timeframe,
-  TimeframeValue
+  TimeframeValue,
+  CreateBackfillJobRequest,
+  BackfillJobDto,
+  UniverseCoverageSummaryDto,
+  SymbolGapsDto,
+  ForwardTestPerformanceDto,
+  UserProfileDto
 } from "@/types";
 
 // Base API configuration: Supports relative /api behind Nginx, or env override
@@ -416,6 +421,87 @@ export const PaperTradingApi = {
         clientOrderId: order.clientOrderId ?? null
       })
     });
+  },
+
+  getForwardTestPortfolio: async (): Promise<PaperPortfolioDto> => {
+    return fetchApi<PaperPortfolioDto>("/paper-portfolios/forward-test");
+  },
+
+  getForwardTestPerformance: async (portfolioId: number): Promise<ForwardTestPerformanceDto> => {
+    return fetchApi<ForwardTestPerformanceDto>(`/paper-portfolios/${portfolioId}/forward-test-performance`);
+  },
+
+  triggerAutoTrade: async (portfolioId: number): Promise<boolean> => {
+    return fetchApi<boolean>(`/paper-portfolios/${portfolioId}/auto-trade`, {
+      method: "POST"
+    });
+  }
+};
+
+export const ForwardTestingApi = {
+  getPortfolio: async (): Promise<PaperPortfolioDto> => {
+    return fetchApi<PaperPortfolioDto>("/paper-portfolios/forward-test");
+  },
+
+  getPerformance: async (portfolioId: number): Promise<ForwardTestPerformanceDto> => {
+    return fetchApi<ForwardTestPerformanceDto>(`/paper-portfolios/${portfolioId}/forward-test-performance`);
+  },
+
+  triggerAutoTrade: async (portfolioId: number): Promise<boolean> => {
+    return fetchApi<boolean>(`/paper-portfolios/${portfolioId}/auto-trade`, {
+      method: "POST"
+    });
+  }
+};
+
+export const BackfillApi = {
+  startBackfill: async (request: CreateBackfillJobRequest): Promise<BackfillJobDto> => {
+    return fetchApi<BackfillJobDto>("/admin/market-data/backfill", {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+  },
+
+  getBackfillJobs: async (): Promise<BackfillJobDto[]> => {
+    return fetchApi<BackfillJobDto[]>("/admin/market-data/backfill");
+  },
+
+  getBackfillJob: async (id: number): Promise<BackfillJobDto> => {
+    return fetchApi<BackfillJobDto>(`/admin/market-data/backfill/${id}`);
+  },
+
+  pauseBackfill: async (id: number): Promise<boolean> => {
+    return fetchApi<boolean>(`/admin/market-data/backfill/${id}/pause`, {
+      method: "POST"
+    });
+  },
+
+  resumeBackfill: async (id: number): Promise<boolean> => {
+    return fetchApi<boolean>(`/admin/market-data/backfill/${id}/resume`, {
+      method: "POST"
+    });
+  },
+
+  cancelBackfill: async (id: number): Promise<boolean> => {
+    return fetchApi<boolean>(`/admin/market-data/backfill/${id}/cancel`, {
+      method: "POST"
+    });
+  },
+
+  getUniverseCoverage: async (startDate?: string, endDate?: string): Promise<UniverseCoverageSummaryDto> => {
+    const params = new URLSearchParams();
+    if (startDate) params.append("startDate", startDate);
+    if (endDate) params.append("endDate", endDate);
+    const qs = params.toString();
+    return fetchApi<UniverseCoverageSummaryDto>(`/admin/market-data/coverage${qs ? `?${qs}` : ""}`);
+  },
+
+  getSymbolGaps: async (symbol: string, startDate?: string, endDate?: string): Promise<SymbolGapsDto> => {
+    const params = new URLSearchParams();
+    if (startDate) params.append("startDate", startDate);
+    if (endDate) params.append("endDate", endDate);
+    const qs = params.toString();
+    return fetchApi<SymbolGapsDto>(`/admin/market-data/coverage/${symbol}/gaps${qs ? `?${qs}` : ""}`);
   }
 };
 

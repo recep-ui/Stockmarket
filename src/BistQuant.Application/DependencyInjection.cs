@@ -37,6 +37,8 @@ public static class DependencyInjection
         services.AddScoped<IPaperTradingService, PaperTradingService>();
         services.AddScoped<IWatchlistService, WatchlistService>();
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<IMarketDataGapDetector, MarketDataGapDetector>();
+        services.AddScoped<IForwardTestPerformanceService, ForwardTestPerformanceService>();
         return services;
     }
 }

@@ -79,3 +79,43 @@ public enum BacktestStatus : byte
     Completed = 3,
     Failed = 4
 }
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum BackfillJobStatus : byte
+{
+    Pending = 1,
+    Running = 2,
+    Paused = 3,
+    Completed = 4,
+    CompletedWithErrors = 5,
+    Failed = 6,
+    Cancelled = 7
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum MarketDataOrigin : byte
+{
+    OfficialBistBulletin = 1,
+    ManualOfficialBistBulletin = 2,
+    Demo = 3
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum MarketDataGapReason : byte
+{
+    NoTrade = 1,
+    Suspended = 2,
+    BulletinMissing = 3,
+    ImportFailed = 4,
+    Unknown = 5
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum AnalysisStatus : byte
+{
+    Analyzed = 1,
+    InsufficientHistory = 2,
+    CorporateActionReview = 3,
+    Suspended = 4,
+    MissingData = 5
+}

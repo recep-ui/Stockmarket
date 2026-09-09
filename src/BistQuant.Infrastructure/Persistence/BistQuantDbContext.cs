@@ -35,6 +35,8 @@ public class BistQuantDbContext : DbContext, IApplicationDbContext
     public DbSet<DailyInstrumentMarketStats> DailyInstrumentMarketStats => Set<DailyInstrumentMarketStats>();
     public DbSet<BulletinFetchAttempt> BulletinFetchAttempts => Set<BulletinFetchAttempt>();
     public DbSet<IndicatorContinuityWarning> IndicatorContinuityWarnings => Set<IndicatorContinuityWarning>();
+    public DbSet<BackfillJob> BackfillJobs => Set<BackfillJob>();
+    public DbSet<ForwardTestDailyReport> ForwardTestDailyReports => Set<ForwardTestDailyReport>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
